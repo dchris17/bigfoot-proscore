@@ -1,48 +1,40 @@
 import { prisma } from "@/lib/prisma";
-import { computeProScore, GOALS, KpiInput } from "@/lib/scoring/engine";
-import { denseRank } from "@/lib/scoring/engine";
+import { computeProScore, GOALS, KpiInput, denseRank } from "@/lib/scoring/engine";
 
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+// Team color palettes — cycles through for non-podium techs
+const CARD_PALETTES = [
+  { top: "from-blue-700 to-blue-900",   accent: "#1d4ed8" },
+  { top: "from-violet-700 to-violet-900", accent: "#6d28d9" },
+  { top: "from-teal-700 to-teal-900",   accent: "#0f766e" },
+  { top: "from-rose-700 to-rose-900",   accent: "#be123c" },
+  { top: "from-orange-600 to-orange-900", accent: "#c2410c" },
+  { top: "from-cyan-700 to-cyan-900",   accent: "#0e7490" },
+  { top: "from-indigo-700 to-indigo-900", accent: "#4338ca" },
+  { top: "from-emerald-700 to-emerald-900", accent: "#047857" },
+];
+
+function cardPalette(rank: number, idx: number) {
+  if (rank === 1) return { top: "from-yellow-500 to-yellow-700", accent: "#b45309" };
+  if (rank === 2) return { top: "from-slate-400 to-slate-600",   accent: "#475569" };
+  if (rank === 3) return { top: "from-amber-600 to-amber-800",   accent: "#92400e" };
+  return CARD_PALETTES[idx % CARD_PALETTES.length];
+}
+
+function initials(name: string) {
+  return name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
+}
 
 function currentMonth() {
   const now = new Date();
   return { year: now.getFullYear(), mon: now.getMonth() + 1 };
 }
-
-function daysInMonth(year: number, mon: number) {
-  return new Date(year, mon, 0).getDate();
-}
-
+function daysInMonth(year: number, mon: number) { return new Date(year, mon, 0).getDate(); }
 function daysElapsed(year: number, mon: number) {
   const today = new Date();
-  const isCurrent = today.getFullYear() === year && today.getMonth() + 1 === mon;
-  return isCurrent ? today.getDate() : daysInMonth(year, mon);
-}
-
-function scoreColor(score: number) {
-  if (score >= 80) return "text-emerald-600";
-  if (score >= 60) return "text-amber-500";
-  return "text-red-500";
-}
-
-function scoreBg(score: number) {
-  if (score >= 80) return "bg-emerald-50 border-emerald-200";
-  if (score >= 60) return "bg-amber-50 border-amber-200";
-  return "bg-red-50 border-red-200";
-}
-
-function rankBadge(rank: number) {
-  if (rank === 1) return "bg-yellow-400 text-yellow-900";
-  if (rank === 2) return "bg-gray-300 text-gray-800";
-  if (rank === 3) return "bg-amber-600 text-amber-50";
-  return "bg-gray-100 text-gray-500";
-}
-
-interface KpiPill {
-  label: string;
-  value: string | null;
-  goal: string;
-  good: boolean | null;
+  return today.getFullYear() === year && today.getMonth() + 1 === mon
+    ? today.getDate() : daysInMonth(year, mon);
 }
 
 async function getLeaderboard(year: number, mon: number) {
@@ -55,12 +47,8 @@ async function getLeaderboard(year: number, mon: number) {
     prisma.appointment.findMany({
       where: { date: { gte: monthStart, lt: monthEnd }, status: 1 },
       select: {
-        assignedEmployeeId: true,
-        servicedByEmployeeId: true,
-        productionValue: true,
-        checkIn: true,
-        checkOut: true,
-        rawJson: true,
+        assignedEmployeeId: true, servicedByEmployeeId: true,
+        productionValue: true, checkIn: true, checkOut: true, rawJson: true,
       },
     }),
     prisma.tech.findMany({
@@ -75,9 +63,7 @@ async function getLeaderboard(year: number, mon: number) {
       (a) => (a.servicedByEmployeeId ?? a.assignedEmployeeId) === frId
     );
 
-    // Prod/hr
-    let totalProd = 0;
-    let totalHrs = 0;
+    let totalProd = 0, totalHrs = 0;
     for (const a of serviced) {
       if (a.checkIn && a.checkOut) {
         const hrs = (a.checkOut.getTime() - a.checkIn.getTime()) / 3600000;
@@ -89,13 +75,11 @@ async function getLeaderboard(year: number, mon: number) {
     }
     const prodHr = totalHrs > 0 ? totalProd / totalHrs : null;
 
-    // Reservice %
     const reserviceCount = serviced.filter((a) => {
       const raw = a.rawJson as Record<string, unknown>;
       return raw.originalAppointmentID && raw.originalAppointmentID !== "0";
     }).length;
-    const reservicePct =
-      serviced.length > 0 ? (reserviceCount / serviced.length) * 100 : null;
+    const reservicePct = serviced.length > 0 ? (reserviceCount / serviced.length) * 100 : null;
 
     const inputs: KpiInput[] = [
       { key: "driving",   actual: null,         goal: GOALS.driving },
@@ -105,56 +89,20 @@ async function getLeaderboard(year: number, mon: number) {
       { key: "stars",     actual: null,         goal: GOALS.stars, daysElapsed: de, daysInMonth: dm },
     ];
 
-    const result = computeProScore(inputs);
-
-    const kpis: KpiPill[] = [
-      {
-        label: "Drive",
-        value: null,
-        goal: `${GOALS.driving}`,
-        good: null,
-      },
-      {
-        label: "Reservice",
-        value: reservicePct !== null ? `${reservicePct.toFixed(1)}%` : null,
-        goal: `≤${GOALS.reservice}%`,
-        good: reservicePct !== null ? reservicePct <= GOALS.reservice : null,
-      },
-      {
-        label: "Prod/hr",
-        value: prodHr !== null ? `$${Math.round(prodHr)}` : null,
-        goal: `$${GOALS.prod_hr}`,
-        good: prodHr !== null ? prodHr >= GOALS.prod_hr : null,
-      },
-      {
-        label: "Complete",
-        value: null,
-        goal: `${GOALS.complete}%`,
-        good: null,
-      },
-      {
-        label: "Stars",
-        value: null,
-        goal: `${GOALS.stars}/mo`,
-        good: null,
-      },
-    ];
-
     return {
       techId: tech.id,
       name: tech.name,
       firstName: tech.firstName,
       apptCount: serviced.length,
-      proscore: result.proscore,
-      proscoreRaw: result.proscoreRaw,
-      kpis,
+      reservicePct,
+      prodHr,
+      proscore: computeProScore(inputs).proscore,
+      proscoreRaw: computeProScore(inputs).proscoreRaw,
     };
   });
 
-  // Sort by score desc, rank
   rows.sort((a, b) => b.proscoreRaw - a.proscoreRaw);
   const ranks = denseRank(rows.map((r) => r.proscore));
-
   return rows.map((r, i) => ({ ...r, rank: ranks[i] }));
 }
 
@@ -166,31 +114,25 @@ export default async function DashboardPage() {
 
   let rows: Awaited<ReturnType<typeof getLeaderboard>> = [];
   let dbError = false;
-
-  try {
-    rows = await getLeaderboard(year, mon);
-  } catch {
-    dbError = true;
-  }
+  try { rows = await getLeaderboard(year, mon); } catch { dbError = true; }
 
   return (
-    <div className="min-h-screen bg-gray-950 text-white">
+    <div className="min-h-screen bg-gray-950">
       {/* Header */}
-      <div className="bg-gray-900 border-b border-gray-800 px-4 py-4">
-        <div className="max-w-2xl mx-auto flex items-center justify-between">
+      <div className="bg-gray-900 border-b border-gray-800 px-4 py-4 sticky top-0 z-10">
+        <div className="max-w-3xl mx-auto flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-bold tracking-tight">
-              🦶 ProScore
-            </h1>
-            <p className="text-sm text-gray-400 mt-0.5">{label}</p>
+            <h1 className="text-xl font-black tracking-tight text-white">🦶 ProScore</h1>
+            <p className="text-xs text-gray-400">{label} · Day {de}/{dm}</p>
           </div>
-          <div className="text-right text-xs text-gray-500">
-            Day {de} of {dm}
+          <div className="text-xs text-gray-500 text-right">
+            <span className="inline-block w-2 h-2 rounded-full bg-emerald-400 mr-1" />
+            Live
           </div>
         </div>
       </div>
 
-      <div className="max-w-2xl mx-auto px-4 py-4">
+      <div className="max-w-3xl mx-auto px-3 py-5">
         {dbError && (
           <div className="p-4 bg-red-900/40 border border-red-700 rounded-lg text-red-300 text-sm mb-4">
             Could not load scores — database may be initializing.
@@ -199,67 +141,92 @@ export default async function DashboardPage() {
 
         {!dbError && rows.length === 0 && (
           <div className="text-center py-20 text-gray-500">
-            <p className="text-lg">No techs found.</p>
+            <p>No techs found.</p>
             <p className="text-sm mt-1">
               Run <a href="/setup/employees" className="underline text-blue-400">/setup/employees</a> first.
             </p>
           </div>
         )}
 
-        {/* KPI legend — only shown when scoring is partial */}
-        {rows.length > 0 && (
-          <p className="text-xs text-gray-500 mb-3">
-            Reservice % and Prod/hr from FieldRoutes data. Driving, Completion, and Stars pending sync.
-          </p>
-        )}
+        {/* Card grid */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          {rows.map((row, idx) => {
+            const palette = cardPalette(row.rank, idx);
+            const resGood = row.reservicePct !== null && row.reservicePct <= GOALS.reservice;
+            const prodGood = row.prodHr !== null && row.prodHr >= GOALS.prod_hr;
 
-        <div className="space-y-3">
-          {rows.map((row) => (
-            <div
-              key={row.techId}
-              className={`rounded-xl border p-4 ${scoreBg(row.proscore)}`}
-            >
-              <div className="flex items-center gap-3">
-                {/* Rank badge */}
-                <span
-                  className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 ${rankBadge(row.rank)}`}
-                >
-                  {row.rank}
-                </span>
-
-                {/* Name + appt count */}
-                <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-gray-900 truncate">{row.name}</p>
-                  <p className="text-xs text-gray-500">{row.apptCount} appts serviced</p>
-                </div>
-
-                {/* Score */}
-                <div className="text-right flex-shrink-0">
-                  <span className={`text-3xl font-black ${scoreColor(row.proscore)}`}>
-                    {row.proscore}
+            return (
+              <div
+                key={row.techId}
+                className="rounded-2xl overflow-hidden shadow-lg border border-white/10 flex flex-col"
+                style={{ background: "#1a1a2e" }}
+              >
+                {/* Card top — photo area */}
+                <div className={`bg-gradient-to-b ${palette.top} relative flex flex-col items-center pt-5 pb-3 px-3`}>
+                  {/* Rank badge */}
+                  <span className="absolute top-2 left-2 text-xs font-black text-white/80">
+                    #{row.rank}
                   </span>
+
+                  {/* Avatar */}
+                  <div
+                    className="w-16 h-16 rounded-full flex items-center justify-center text-2xl font-black text-white shadow-lg border-2 border-white/30"
+                    style={{ background: "rgba(0,0,0,0.25)" }}
+                  >
+                    {initials(row.name)}
+                  </div>
+
+                  {/* ProScore — big like a batting average */}
+                  <div className="mt-2 text-4xl font-black text-white tracking-tight leading-none">
+                    {row.proscore}
+                  </div>
+                  <div className="text-xs text-white/60 uppercase tracking-widest mt-0.5">
+                    ProScore
+                  </div>
+                </div>
+
+                {/* Card bottom — name + stats */}
+                <div className="flex-1 px-3 py-2 flex flex-col gap-2">
+                  {/* Name */}
+                  <div className="text-center">
+                    <p className="text-sm font-bold text-white leading-tight">{row.firstName}</p>
+                    <p className="text-xs text-gray-400 leading-tight">
+                      {row.name.split(" ").slice(1).join(" ")}
+                    </p>
+                  </div>
+
+                  {/* Stats grid */}
+                  <div className="border-t border-white/10 pt-2 grid grid-cols-2 gap-x-2 gap-y-1.5">
+                    <div className="text-center">
+                      <p className={`text-sm font-bold ${row.reservicePct !== null ? (resGood ? "text-emerald-400" : "text-red-400") : "text-gray-600"}`}>
+                        {row.reservicePct !== null ? `${row.reservicePct.toFixed(1)}%` : "—"}
+                      </p>
+                      <p className="text-[10px] text-gray-500 uppercase tracking-wide">Reservice</p>
+                    </div>
+                    <div className="text-center">
+                      <p className={`text-sm font-bold ${row.prodHr !== null ? (prodGood ? "text-emerald-400" : "text-red-400") : "text-gray-600"}`}>
+                        {row.prodHr !== null ? `$${Math.round(row.prodHr)}` : "—"}
+                      </p>
+                      <p className="text-[10px] text-gray-500 uppercase tracking-wide">Prod/hr</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-sm font-bold text-gray-600">—</p>
+                      <p className="text-[10px] text-gray-500 uppercase tracking-wide">Drive</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-sm font-bold text-gray-600">—</p>
+                      <p className="text-[10px] text-gray-500 uppercase tracking-wide">Stars</p>
+                    </div>
+                  </div>
+
+                  {/* Appt count */}
+                  <p className="text-center text-[10px] text-gray-600 border-t border-white/5 pt-1.5">
+                    {row.apptCount} appts
+                  </p>
                 </div>
               </div>
-
-              {/* KPI pills */}
-              <div className="flex gap-2 mt-3 flex-wrap">
-                {row.kpis.map((kpi) => (
-                  <div
-                    key={kpi.label}
-                    className={`text-xs px-2 py-1 rounded-full border font-medium ${
-                      kpi.value === null
-                        ? "bg-gray-100 border-gray-200 text-gray-400"
-                        : kpi.good
-                        ? "bg-emerald-100 border-emerald-200 text-emerald-700"
-                        : "bg-red-100 border-red-200 text-red-700"
-                    }`}
-                  >
-                    {kpi.label}{kpi.value ? `: ${kpi.value}` : " —"}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
