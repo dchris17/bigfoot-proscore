@@ -20,45 +20,46 @@ export async function GET() {
   const ids: number[] = search.employeeIDs ?? [];
   const sampleId = String(ids[0]);
 
-  // 2. employee/get — the action that returned success:true
+  // 2. employee/get with employeeID param — check ignoredParams
   const getResult = await frGet("employee", "get", { employeeID: sampleId });
   const getPropName: string = getResult.propertyName ?? "employees";
-  const getKeys = Object.keys(getResult);
-  // Try to extract one employee object
-  const empObj = getResult[getPropName]
-    ? Object.values(getResult[getPropName] as Record<string, unknown>)[0] as Record<string, unknown>
-    : null;
 
-  // 3. Try batch get with comma-separated IDs
-  const batchIds = ids.slice(0, 5).join(",");
-  const batchGet = await frGet("employee", "get", { employeeID: batchIds });
-  const batchPropName: string = batchGet.propertyName ?? "employees";
-  const batchCount = batchGet[batchPropName]
-    ? Object.keys(batchGet[batchPropName] as Record<string, unknown>).length
+  // 3. employee/get with no params — does it return all?
+  const getAll = await frGet("employee", "get", {});
+  const getAllPropName: string = getAll.propertyName ?? "employees";
+  const getAllCount = getAll[getAllPropName]
+    ? Object.keys(getAll[getAllPropName] as Record<string, unknown>).length
     : 0;
 
-  // 4. Appointment count for Oct 2026
-  const apptSearch = await frGet("appointment", "search", {
-    status: "1",
-    dateStart: "2026-10-01",
-    dateEnd: "2026-10-15",
-  });
+  // First employee from getAll (if any)
+  const firstEmp = getAllCount > 0
+    ? (Object.values(getAll[getAllPropName] as Record<string, unknown>)[0] as Record<string, unknown>)
+    : null;
 
   return NextResponse.json({
     employee_count: ids.length,
     sample_id: sampleId,
-    // get action result
+    // With employeeID param
     get_success: getResult.success,
-    get_propertyName: getPropName,
-    get_keys: getKeys,
-    get_sample_employee: empObj
-      ? { id: empObj.employeeID, name: `${empObj.fname} ${empObj.lname}`, type: empObj.type, officeID: empObj.officeID }
-      : null,
-    // batch get
-    batch_get_success: batchGet.success,
-    batch_get_propertyName: batchPropName,
-    batch_count: batchCount,
-    // appointments
-    appt_count: apptSearch.appointmentIDs?.length ?? 0,
+    get_count: getResult.count,
+    get_ignoredParams: getResult.ignoredParams,
+    get_propName: getPropName,
+    // Without params
+    getAll_success: getAll.success,
+    getAll_count: getAllCount,
+    getAll_ignoredParams: getAll.ignoredParams,
+    first_employee: firstEmp ? {
+      id: firstEmp.employeeID,
+      fname: firstEmp.fname,
+      lname: firstEmp.lname,
+      type: firstEmp.type,
+      officeID: firstEmp.officeID,
+    } : null,
+    // Appointment count
+    appt_count: (await frGet("appointment", "search", {
+      status: "1",
+      dateStart: "2026-10-01",
+      dateEnd: "2026-10-15",
+    })).appointmentIDs?.length ?? 0,
   });
 }
