@@ -109,8 +109,10 @@ export async function POST(req: NextRequest) {
           const prodVal = parseFloat(a.productionValue);
           const production = prodVal >= 0 ? prodVal : null;
 
-          const checkIn = a.checkIn ? new Date(a.checkIn.replace(" ", "T") + "-06:00") : null;
-          const checkOut = a.checkOut ? new Date(a.checkOut.replace(" ", "T") + "-06:00") : null;
+          const parseTs = (s: string | null) =>
+            s && !s.startsWith("0000") ? new Date(s.replace(" ", "T") + "-06:00") : null;
+          const checkIn = parseTs(a.checkIn);
+          const checkOut = parseTs(a.checkOut);
 
           await prisma.appointment.upsert({
             where: { id: parseInt(a.appointmentID) },
