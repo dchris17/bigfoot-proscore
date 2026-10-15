@@ -115,7 +115,7 @@ export async function POST(req: NextRequest) {
           await prisma.appointment.upsert({
             where: { id: parseInt(a.appointmentID) },
             update: {
-              rawJson: a,
+              rawJson: a as object,
               date: apptDate,
               status: parseInt(a.status),
               assignedEmployeeId: parseInt(a.employeeID),
@@ -130,7 +130,7 @@ export async function POST(req: NextRequest) {
             },
             create: {
               id: parseInt(a.appointmentID),
-              rawJson: a,
+              rawJson: a as object,
               date: apptDate,
               status: parseInt(a.status),
               assignedEmployeeId: parseInt(a.employeeID),
