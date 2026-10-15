@@ -39,6 +39,7 @@ model Tech {
   scores           MonthlyScore[]
   autoReviews      Review[]           @relation("AutoTech")
   manualReviews    Review[]           @relation("ManualTech")
+  attributedTrips  Trip[]
 }
 
 model Truck {
@@ -114,7 +115,7 @@ model Trip {
   rawJson         Json
 
   truck          Truck? @relation(fields: [imei], references: [bouncieImei])
-  attributedTech Tech?  @relation(fields: [attributedTechId], references: [id]) // not defined in Tech model yet
+  attributedTech Tech?  @relation(fields: [attributedTechId], references: [id])
 
   @@index([imei, startedAt])
 }
