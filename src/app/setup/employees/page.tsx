@@ -20,7 +20,7 @@ const KNOWN: Record<number, { name: string; firstName: string; defaultRole: Role
   10358: { name: "Chris Bogardus",       firstName: "Chris",   defaultRole: "technician" },
   10366: { name: "Clark Steele",         firstName: "Clark",   defaultRole: "skip" },
   10051: { name: "Dan Christensen",      firstName: "Dan",     defaultRole: "admin" },
-  10050: { name: "Daniel Christensen",   firstName: "Daniel",  defaultRole: "technician" },
+  10050: { name: "Daniel Christensen",   firstName: "Daniel",  defaultRole: "skip" },
   10008: { name: "Daniel Schofield",     firstName: "Daniel",  defaultRole: "skip" },
   10360: { name: "David Cox",            firstName: "David",   defaultRole: "technician" },
   10354: { name: "Eden Watkins",         firstName: "Eden",    defaultRole: "skip" },
