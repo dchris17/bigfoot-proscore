@@ -2,60 +2,59 @@ import { NextResponse } from "next/server";
 
 const BASE_URL = `https://${process.env.FIELDROUTES_SUBDOMAIN ?? "aversepest"}.pestroutes.com/api`;
 
-async function frGet(entity: string, action: string, params: Record<string, string>, keyOverride?: { key: string; token: string }) {
+async function frGet(entity: string, action: string, params: Record<string, string>, key?: string, token?: string) {
   const url = new URL(`${BASE_URL}/${entity}/${action}`);
-  url.searchParams.set("authenticationKey", keyOverride?.key ?? process.env.FIELDROUTES_AUTH_KEY ?? "");
-  url.searchParams.set("authenticationToken", keyOverride?.token ?? process.env.FIELDROUTES_AUTH_TOKEN ?? "");
+  url.searchParams.set("authenticationKey", key ?? process.env.FIELDROUTES_AUTH_KEY ?? "");
+  url.searchParams.set("authenticationToken", token ?? process.env.FIELDROUTES_AUTH_TOKEN ?? "");
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   const res = await fetch(url.toString(), { next: { revalidate: 0 } });
   return res.json();
 }
 
-function extractEmployees(result: Record<string, unknown>): Array<Record<string, unknown>> {
-  if (!result.success) return [];
-  const propName = (result.propertyName as string) ?? "employees";
-  const data = result[propName];
-  if (!data) return [];
-  return Object.values(data as Record<string, unknown>) as Array<Record<string, unknown>>;
-}
-
 export async function GET() {
-  // Try employee/get with officeID=1 (existing key)
-  const getOffice1 = await frGet("employee", "get", { officeID: "1" });
-  const emps1 = extractEmployees(getOffice1);
+  // Try appointment/get with officeID — maybe that unlocks it
+  const apptGet = await frGet("appointment", "get", {
+    officeID: "1",
+    dateStart: "2026-10-14",
+    dateEnd: "2026-10-14",
+  });
+  const apptProp = (apptGet.propertyName as string) ?? "appointments";
+  const apptObjs = apptGet[apptProp]
+    ? Object.values(apptGet[apptProp] as Record<string, unknown>) as Array<Record<string, unknown>>
+    : [];
 
-  // Also try employee/search with officeID=1 to see if it adds data
-  const searchOffice1 = await frGet("employee", "search", { status: "1", officeID: "1" });
-  const searchOffice1Ids: number[] = searchOffice1.employeeIDs ?? [];
-
-  // Try Office 2 key if available
-  const key2 = process.env.FIELDROUTES_AUTH_KEY_2;
-  const token2 = process.env.FIELDROUTES_AUTH_TOKEN_2;
-  let emps2: Array<Record<string, unknown>> = [];
-  let search2Ids: number[] = [];
-  if (key2 && token2) {
-    const getOffice2 = await frGet("employee", "get", { officeID: "2" }, { key: key2, token: token2 });
-    emps2 = extractEmployees(getOffice2);
-    const search2 = await frGet("employee", "search", { status: "1" }, { key: key2, token: token2 });
-    search2Ids = search2.employeeIDs ?? [];
-  }
-
-  const allEmps = [...emps1, ...emps2].map((e) => ({
-    id: e.employeeID,
-    name: `${e.fname} ${e.lname}`.trim(),
-    type: e.type,
-    officeID: e.officeID,
-    active: e.active,
+  // Pull first few appointments and show all their keys + relevant fields
+  const sampleAppts = apptObjs.slice(0, 3).map((a) => ({
+    appointmentID: a.appointmentID,
+    assignedEmployeeID: a.assignedEmployeeID,
+    servicedByEmployeeID: a.servicedByEmployeeID,
+    techName: a.techName,
+    employeeName: a.employeeName,
+    techFirstName: a.techFirstName,
+    techLastName: a.techLastName,
+    allKeys: Object.keys(a),
   }));
 
+  // Also try serviceType/get with officeID (for curiosity)
+  const stGet = await frGet("serviceType", "get", { officeID: "1" });
+  const stProp = (stGet.propertyName as string) ?? "serviceTypes";
+  const stObjs = stGet[stProp]
+    ? Object.values(stGet[stProp] as Record<string, unknown>) as Array<Record<string, unknown>>
+    : [];
+  const sampleSt = stObjs[0];
+
   return NextResponse.json({
-    office1_get_success: getOffice1.success,
-    office1_get_count: emps1.length,
-    office1_search_count: searchOffice1Ids.length,
-    office2_key_configured: !!(key2 && token2),
-    office2_get_count: emps2.length,
-    office2_search_count: search2Ids.length,
-    total_employee_count: allEmps.length,
-    employees: allEmps,
+    appt_get_success: apptGet.success,
+    appt_get_count: apptObjs.length,
+    appt_get_propertyName: apptGet.propertyName,
+    sample_appointments: sampleAppts,
+    st_get_success: stGet.success,
+    st_get_count: stObjs.length,
+    sample_service_type: sampleSt ? {
+      id: sampleSt.serviceTypeID,
+      description: sampleSt.description,
+      category: sampleSt.category,
+      keys: Object.keys(sampleSt),
+    } : null,
   });
 }
