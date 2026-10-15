@@ -20,15 +20,24 @@ export async function GET() {
   const ids: number[] = search.employeeIDs ?? [];
   const sampleId = String(ids[0]);
 
-  // 2. Try to get a single employee via search with employeeID filter
-  const byId = await frGet("employee", "search", { employeeID: sampleId });
-  const byIdKeys = Object.keys(byId);
+  // 2. employee/get — the action that returned success:true
+  const getResult = await frGet("employee", "get", { employeeID: sampleId });
+  const getPropName: string = getResult.propertyName ?? "employees";
+  const getKeys = Object.keys(getResult);
+  // Try to extract one employee object
+  const empObj = getResult[getPropName]
+    ? Object.values(getResult[getPropName] as Record<string, unknown>)[0] as Record<string, unknown>
+    : null;
 
-  // 3. Also try 'get' action and 'getAllActive' action
-  const getAction = await frGet("employee", "get", { employeeID: sampleId });
-  const getAllActive = await frGet("employee", "getAllActive", {});
+  // 3. Try batch get with comma-separated IDs
+  const batchIds = ids.slice(0, 5).join(",");
+  const batchGet = await frGet("employee", "get", { employeeID: batchIds });
+  const batchPropName: string = batchGet.propertyName ?? "employees";
+  const batchCount = batchGet[batchPropName]
+    ? Object.keys(batchGet[batchPropName] as Record<string, unknown>).length
+    : 0;
 
-  // 4. Inspect the appointment search to confirm we can at least sync appointments
+  // 4. Appointment count for Oct 2026
   const apptSearch = await frGet("appointment", "search", {
     status: "1",
     dateStart: "2026-10-01",
@@ -38,21 +47,18 @@ export async function GET() {
   return NextResponse.json({
     employee_count: ids.length,
     sample_id: sampleId,
-    // What does search by employeeID return?
-    byId_success: byId.success,
-    byId_keys: byIdKeys,
-    byId_propertyName: byId.propertyName,
-    // get action
-    get_success: getAction.success,
-    get_error: getAction.errorMessage,
-    // getAllActive action
-    getAllActive_success: getAllActive.success,
-    getAllActive_error: getAllActive.errorMessage,
-    getAllActive_propertyName: getAllActive.propertyName,
-    getAllActive_keys: Object.keys(getAllActive),
-    // appointment check
-    appt_success: apptSearch.success,
-    appt_error: apptSearch.errorMessage,
+    // get action result
+    get_success: getResult.success,
+    get_propertyName: getPropName,
+    get_keys: getKeys,
+    get_sample_employee: empObj
+      ? { id: empObj.employeeID, name: `${empObj.fname} ${empObj.lname}`, type: empObj.type, officeID: empObj.officeID }
+      : null,
+    // batch get
+    batch_get_success: batchGet.success,
+    batch_get_propertyName: batchPropName,
+    batch_count: batchCount,
+    // appointments
     appt_count: apptSearch.appointmentIDs?.length ?? 0,
   });
 }
