@@ -24,9 +24,9 @@ export async function GET() {
 
   const ids: number[] = search.employeeIDs ?? [];
   const propertyName: string = search.propertyName ?? "employees";
-  const rawEmployees: Record<string, unknown>[] = search[propertyName]
+  const rawEmployees = (search[propertyName]
     ? Object.values(search[propertyName] as Record<string, unknown>)
-    : [];
+    : []) as Record<string, unknown>[];
 
   const techs = rawEmployees.map((e: Record<string, unknown>) => ({
     id: e.employeeID,
@@ -40,9 +40,9 @@ export async function GET() {
   const stSearch = await frGet("serviceType", "search", { includeData: "1" });
   const stIds: number[] = stSearch.serviceTypeIDs ?? [];
   const stPropertyName: string = stSearch.propertyName ?? "serviceTypes";
-  const rawServiceTypes: Record<string, unknown>[] = stSearch[stPropertyName]
+  const rawServiceTypes = (stSearch[stPropertyName]
     ? Object.values(stSearch[stPropertyName] as Record<string, unknown>)
-    : [];
+    : []) as Record<string, unknown>[];
 
   const serviceTypes = rawServiceTypes.map((s: Record<string, unknown>) => ({
     id: s.serviceTypeID,
