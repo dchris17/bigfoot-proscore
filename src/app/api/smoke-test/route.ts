@@ -26,26 +26,22 @@ export async function GET() {
     return NextResponse.json({ error: "No employees returned" }, { status: 500 });
   }
 
-  // 2. Try getByEmployeeIDs with just one ID to see the error
-  const singleId = String(ids[0]);
-  const single = await frGet("employee", "getByEmployeeIDs", { employeeIDs: singleId });
+  // 2. Fetch employee details — FieldRoutes uses getByEmployeeID (singular)
+  const batch = ids.slice(0, 50).join(",");
+  const records = await frGet("employee", "getByEmployeeID", { employeeID: batch });
 
-  // 3. If that fails, return diagnostic info
-  if (!single.success) {
+  if (!records.success) {
+    // Try alternate param name
+    const alt = await frGet("employee", "getByEmployeeID", { employeeIDs: batch });
     return NextResponse.json({
       employee_count: ids.length,
-      sample_id: singleId,
-      getByEmployeeIDs_error: single.errorMessage,
-      getByEmployeeIDs_success: single.success,
-      getByEmployeeIDs_requestAPIKeyType: single.requestAPIKeyType,
-      getByEmployeeIDs_keys: Object.keys(single),
-      service_type_count: (await frGet("serviceType", "search", {})).serviceTypeIDs?.length ?? 0,
+      getByEmployeeID_error: records.errorMessage,
+      alt_getByEmployeeID_success: alt.success,
+      alt_getByEmployeeID_error: alt.errorMessage,
+      alt_propertyName: alt.propertyName,
     });
   }
 
-  // 4. Full batch if single ID worked
-  const batch = ids.slice(0, 50).join(",");
-  const records = await frGet("employee", "getByEmployeeIDs", { employeeIDs: batch });
   const propName: string = records.propertyName ?? "employees";
   const employees = (records[propName]
     ? Object.values(records[propName] as Record<string, unknown>)
@@ -59,15 +55,15 @@ export async function GET() {
     active: e.active,
   }));
 
-  // 5. Service types
+  // 3. Service types
   const stSearch = await frGet("serviceType", "search", {});
   const stIds: number[] = stSearch.serviceTypeIDs ?? [];
   const stBatch = stIds.slice(0, 50).join(",");
   const stRecords = stIds.length
-    ? await frGet("serviceType", "getByServiceTypeIDs", { serviceTypeIDs: stBatch })
+    ? await frGet("serviceType", "getByServiceTypeID", { serviceTypeID: stBatch })
     : { success: false };
   const stPropName: string = stRecords.propertyName ?? "serviceTypes";
-  const serviceTypes = (stRecords[stPropName]
+  const serviceTypes = (stRecords.success && stRecords[stPropName]
     ? Object.values(stRecords[stPropName] as Record<string, unknown>)
     : []) as Record<string, unknown>[];
 
