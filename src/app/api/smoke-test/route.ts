@@ -24,8 +24,9 @@ export async function GET() {
   }
 
   // 2. Fetch full records in one batch
-  const batch = ids.slice(0, 50).join(",");
+  const batch = ids.slice(0, 10).join(",");
   const records = await frGet("employee", "getByEmployeeIDs", { employeeIDs: batch });
+  const recordKeys = Object.keys(records).filter(k => k !== "authenticationKey" && k !== "authenticationToken");
   const employees: Record<string, unknown>[] = records.success
     ? Object.values(records[records.propertyName ?? "employees"] ?? {})
     : [];
@@ -42,16 +43,23 @@ export async function GET() {
   const stSearch = await frGet("serviceType", "search", {});
   const stIds: number[] = stSearch.serviceTypeIDs ?? [];
   const stRecords = stIds.length
-    ? await frGet("serviceType", "getByServiceTypeIDs", { serviceTypeIDs: stIds.slice(0, 100).join(",") })
+    ? await frGet("serviceType", "getByServiceTypeIDs", { serviceTypeIDs: stIds.slice(0, 10).join(",") })
     : {};
+  const stRecordKeys = Object.keys(stRecords).filter(k => k !== "authenticationKey" && k !== "authenticationToken");
   const serviceTypes: Record<string, unknown>[] = stRecords.success
     ? Object.values(stRecords[stRecords.propertyName ?? "serviceTypes"] ?? {})
     : [];
 
   return NextResponse.json({
     employee_count: ids.length,
+    records_success: records.success,
+    records_propertyName: records.propertyName,
+    records_keys: recordKeys,
     techs,
     service_type_count: stIds.length,
+    st_records_success: stRecords.success,
+    st_records_propertyName: stRecords.propertyName,
+    st_records_keys: stRecordKeys,
     service_types: serviceTypes.map((s: Record<string, unknown>) => ({
       id: s.serviceTypeID,
       description: s.description,
