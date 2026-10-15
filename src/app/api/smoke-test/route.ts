@@ -2,49 +2,60 @@ import { NextResponse } from "next/server";
 
 const BASE_URL = `https://${process.env.FIELDROUTES_SUBDOMAIN ?? "aversepest"}.pestroutes.com/api`;
 
-async function frGet(entity: string, action: string, params: Record<string, string>) {
+async function frGet(entity: string, action: string, params: Record<string, string>, keyOverride?: { key: string; token: string }) {
   const url = new URL(`${BASE_URL}/${entity}/${action}`);
-  url.searchParams.set("authenticationKey", process.env.FIELDROUTES_AUTH_KEY ?? "");
-  url.searchParams.set("authenticationToken", process.env.FIELDROUTES_AUTH_TOKEN ?? "");
+  url.searchParams.set("authenticationKey", keyOverride?.key ?? process.env.FIELDROUTES_AUTH_KEY ?? "");
+  url.searchParams.set("authenticationToken", keyOverride?.token ?? process.env.FIELDROUTES_AUTH_TOKEN ?? "");
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   const res = await fetch(url.toString(), { next: { revalidate: 0 } });
   return res.json();
 }
 
+function extractEmployees(result: Record<string, unknown>): Array<Record<string, unknown>> {
+  if (!result.success) return [];
+  const propName = (result.propertyName as string) ?? "employees";
+  const data = result[propName];
+  if (!data) return [];
+  return Object.values(data as Record<string, unknown>) as Array<Record<string, unknown>>;
+}
+
 export async function GET() {
-  // Employee count
-  const empSearch = await frGet("employee", "search", { status: "1" });
-  if (!empSearch.success) {
-    return NextResponse.json({ error: "FieldRoutes employee search failed", detail: empSearch.errorMessage }, { status: 500 });
+  // Try employee/get with officeID=1 (existing key)
+  const getOffice1 = await frGet("employee", "get", { officeID: "1" });
+  const emps1 = extractEmployees(getOffice1);
+
+  // Also try employee/search with officeID=1 to see if it adds data
+  const searchOffice1 = await frGet("employee", "search", { status: "1", officeID: "1" });
+  const searchOffice1Ids: number[] = searchOffice1.employeeIDs ?? [];
+
+  // Try Office 2 key if available
+  const key2 = process.env.FIELDROUTES_AUTH_KEY_2;
+  const token2 = process.env.FIELDROUTES_AUTH_TOKEN_2;
+  let emps2: Array<Record<string, unknown>> = [];
+  let search2Ids: number[] = [];
+  if (key2 && token2) {
+    const getOffice2 = await frGet("employee", "get", { officeID: "2" }, { key: key2, token: token2 });
+    emps2 = extractEmployees(getOffice2);
+    const search2 = await frGet("employee", "search", { status: "1" }, { key: key2, token: token2 });
+    search2Ids = search2.employeeIDs ?? [];
   }
-  const empIds: number[] = empSearch.employeeIDs ?? [];
 
-  // Service type count
-  const stSearch = await frGet("serviceType", "search", {});
-  const stIds: number[] = stSearch.serviceTypeIDs ?? [];
-
-  // Appointment count for current month
-  const now = new Date();
-  const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
-  const today = now.toISOString().slice(0, 10);
-  const apptSearch = await frGet("appointment", "search", {
-    status: "1",
-    dateStart: monthStart,
-    dateEnd: today,
-  });
-  const apptIds: number[] = apptSearch.appointmentIDs ?? [];
+  const allEmps = [...emps1, ...emps2].map((e) => ({
+    id: e.employeeID,
+    name: `${e.fname} ${e.lname}`.trim(),
+    type: e.type,
+    officeID: e.officeID,
+    active: e.active,
+  }));
 
   return NextResponse.json({
-    ok: true,
-    fieldroutes_subdomain: process.env.FIELDROUTES_SUBDOMAIN ?? "aversepest",
-    // Counts confirmed via search (search endpoint works with standard API key)
-    active_employee_count: empIds.length,
-    service_type_count: stIds.length,
-    // Appointments this month (status=1 = completed)
-    completed_appts_this_month: apptIds.length,
-    appt_date_range: { from: monthStart, to: today },
-    // Note: employee/get and appointment/get require a higher-privilege API key
-    // For Phase 1 sync: need admin API key to fetch full employee/appointment records
-    note: "employee details (names, types) require an admin-level FieldRoutes API key — standard key returns IDs only",
+    office1_get_success: getOffice1.success,
+    office1_get_count: emps1.length,
+    office1_search_count: searchOffice1Ids.length,
+    office2_key_configured: !!(key2 && token2),
+    office2_get_count: emps2.length,
+    office2_search_count: search2Ids.length,
+    total_employee_count: allEmps.length,
+    employees: allEmps,
   });
 }
