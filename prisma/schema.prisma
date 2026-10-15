@@ -1,0 +1,242 @@
+// Bigfoot ProScore - Prisma Schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Branch {
+  id                    String   @id @default(cuid())
+  name                  String
+  timezone              String   // e.g. "America/Boise"
+  fieldroutesOfficeId   Int      @unique
+  createdAt             DateTime @default(now())
+
+  techs        Tech[]
+  appointments Appointment[]
+}
+
+model Tech {
+  id                    String   @id @default(cuid())
+  fieldroutesEmployeeId Int      @unique
+  name                  String
+  firstName             String
+  nicknames             String[] // for review matching
+  branchId              String
+  active                Boolean  @default(true)
+  included              Boolean  @default(true) // included in scoring
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  branch           Branch             @relation(fields: [branchId], references: [id])
+  truckAssignments TruckAssignment[]
+  goalOverrides    TechGoalOverride[]
+  kpiResults       MonthlyKpiResult[]
+  scores           MonthlyScore[]
+  autoReviews      Review[]           @relation("AutoTech")
+  manualReviews    Review[]           @relation("ManualTech")
+}
+
+model Truck {
+  id          String   @id @default(cuid())
+  bouncieImei String   @unique
+  nickname    String
+  createdAt   DateTime @default(now())
+
+  assignments TruckAssignment[]
+  trips       Trip[]
+}
+
+model TruckAssignment {
+  id        String    @id @default(cuid())
+  truckId   String
+  techId    String
+  startDate DateTime
+  endDate   DateTime? // null = ongoing
+
+  truck Truck @relation(fields: [truckId], references: [id])
+  tech  Tech  @relation(fields: [techId], references: [id])
+
+  @@index([truckId, startDate])
+}
+
+model ServiceType {
+  id          Int    @id // FieldRoutes serviceTypeID
+  description String
+  category    String
+  isReservice Boolean @default(false)
+
+  appointments Appointment[]
+}
+
+model Appointment {
+  id                    Int      @id // FieldRoutes appointmentID
+  rawJson               Json
+  date                  DateTime
+  status                Int      // 0=Pending, 1=Completed, 2=Cancelled, etc.
+  assignedEmployeeId    Int
+  servicedByEmployeeId  Int?
+  serviceTypeId         Int?
+  category              String?
+  isReservice           Boolean  @default(false)
+  productionValue       Decimal? @db.Decimal(10, 2)
+  checkIn               DateTime?
+  checkOut              DateTime?
+  customerId            Int?
+  subscriptionId        Int?
+  officeId              Int?
+  branchId              String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  branch      Branch?      @relation(fields: [branchId], references: [id])
+  serviceType ServiceType? @relation(fields: [serviceTypeId], references: [id])
+
+  @@index([date, status])
+  @@index([assignedEmployeeId, date])
+  @@index([servicedByEmployeeId, date])
+}
+
+model Trip {
+  id              String   @id // Bouncie transactionId
+  imei            String
+  startedAt       DateTime
+  endedAt         DateTime
+  distanceMiles   Decimal  @db.Decimal(10, 2)
+  hardBrakes      Int      @default(0)
+  hardAccels      Int      @default(0)
+  speedingSeconds Int      @default(0)
+  attributedTechId String?
+  rawJson         Json
+
+  truck          Truck? @relation(fields: [imei], references: [bouncieImei])
+  attributedTech Tech?  @relation(fields: [attributedTechId], references: [id]) // not defined in Tech model yet
+
+  @@index([imei, startedAt])
+}
+
+model Review {
+  id           String   @id @default(cuid())
+  externalId   String   @unique // from Google/Zapier sheet
+  source       String   // "google", "yelp", etc.
+  location     String?
+  reviewerName String?
+  stars        Int
+  text         String?
+  postedAt     DateTime
+  autoTechId   String?
+  autoReason   String?
+  manualTechId String?
+  manualNone   Boolean  @default(false) // "Not a tech review"
+  assignedBy   String?  // manager email
+  assignedAt   DateTime?
+  createdAt    DateTime @default(now())
+
+  autoTech   Tech? @relation("AutoTech", fields: [autoTechId], references: [id])
+  manualTech Tech? @relation("ManualTech", fields: [manualTechId], references: [id])
+
+  @@index([postedAt])
+}
+
+model KpiDefinition {
+  key          String  @id // "driving", "reservice", "prod_hr", "complete", "stars"
+  name         String
+  direction    String  // "up", "down", "pacedCount"
+  source       String  // "fieldroutes", "bouncie", "reviews"
+  enabled      Boolean @default(true)
+  defaultGoal  Decimal @db.Decimal(10, 4)
+  weight       Decimal @db.Decimal(5, 4) @default(0.2)
+  curveConfig  Json?   // e.g. {"curve": "goal_over_actual"} for reservice
+
+  goalOverrides  TechGoalOverride[]
+  kpiResults     MonthlyKpiResult[]
+}
+
+model TechGoalOverride {
+  id             String   @id @default(cuid())
+  techId         String
+  kpiKey         String
+  goal           Decimal  @db.Decimal(10, 4)
+  effectiveMonth String   // "2026-08" format
+
+  tech Tech          @relation(fields: [techId], references: [id])
+  kpi  KpiDefinition @relation(fields: [kpiKey], references: [key])
+}
+
+model MonthlyKpiResult {
+  id          String   @id @default(cuid())
+  month       String   // "2026-08"
+  techId      String
+  kpiKey      String
+  actual      Decimal? @db.Decimal(10, 4)
+  goal        Decimal  @db.Decimal(10, 4)
+  pacedGoal   Decimal? @db.Decimal(10, 4)
+  progress    Decimal? @db.Decimal(10, 4)
+  computedAt  DateTime @default(now())
+  inputs      Json?    // raw breakdown for drill-downs
+
+  tech Tech          @relation(fields: [techId], references: [id])
+  kpi  KpiDefinition @relation(fields: [kpiKey], references: [key])
+
+  @@unique([month, techId, kpiKey])
+  @@index([month, techId])
+}
+
+model MonthlyScore {
+  id           String   @id @default(cuid())
+  month        String   // "2026-08"
+  techId       String
+  proscoreRaw  Decimal  @db.Decimal(10, 4)
+  proscore     Int
+  rank         Int
+  frozen       Boolean  @default(false)
+  computedAt   DateTime @default(now())
+
+  tech Tech @relation(fields: [techId], references: [id])
+
+  @@unique([month, techId])
+  @@index([month])
+}
+
+model DrivenSnapshot {
+  id          String   @id @default(cuid())
+  month       String
+  techId      String?  // null = not matched
+  techName    String
+  driving     Decimal? @db.Decimal(10, 4)
+  drivingProg Decimal? @db.Decimal(10, 4)
+  reservice   Decimal? @db.Decimal(10, 4)
+  resProg     Decimal? @db.Decimal(10, 4)
+  prodHr      Decimal? @db.Decimal(10, 4)
+  prodHrProg  Decimal? @db.Decimal(10, 4)
+  complete    Decimal? @db.Decimal(10, 4)
+  completeProg Decimal? @db.Decimal(10, 4)
+  stars       Int?
+  starsProg   Decimal? @db.Decimal(10, 4)
+  proscore    Int?
+  rank        Int?
+  uploadedAt  DateTime @default(now())
+  fileName    String
+
+  @@index([month])
+}
+
+model Setting {
+  key       String   @id
+  value     String   // JSON-encoded
+  updatedAt DateTime @updatedAt
+}
+
+model SyncRun {
+  id          String   @id @default(cuid())
+  source      String   // "fieldroutes", "bouncie", "reviews"
+  startedAt   DateTime
+  finishedAt  DateTime?
+  status      String   // "running", "success", "error"
+  counts      Json?
+  errors      Json?
+}
