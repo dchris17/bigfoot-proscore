@@ -12,23 +12,46 @@ async function frGet(entity: string, action: string, params: Record<string, stri
 }
 
 export async function GET() {
-  // 1. Search active employees with includeData to get full records in one call
-  const search = await frGet("employee", "search", { status: "1", includeData: "1" });
+  // 1. Search active employees
+  const search = await frGet("employee", "search", { status: "1" });
   if (!search.success) {
     return NextResponse.json({
       error: "FieldRoutes employee search failed",
       errorMessage: search.errorMessage,
-      keys: Object.keys(search),
     }, { status: 500 });
   }
 
   const ids: number[] = search.employeeIDs ?? [];
-  const propertyName: string = search.propertyName ?? "employees";
-  const rawEmployees = (search[propertyName]
-    ? Object.values(search[propertyName] as Record<string, unknown>)
+  if (!ids.length) {
+    return NextResponse.json({ error: "No employees returned" }, { status: 500 });
+  }
+
+  // 2. Try getByEmployeeIDs with just one ID to see the error
+  const singleId = String(ids[0]);
+  const single = await frGet("employee", "getByEmployeeIDs", { employeeIDs: singleId });
+
+  // 3. If that fails, return diagnostic info
+  if (!single.success) {
+    return NextResponse.json({
+      employee_count: ids.length,
+      sample_id: singleId,
+      getByEmployeeIDs_error: single.errorMessage,
+      getByEmployeeIDs_success: single.success,
+      getByEmployeeIDs_requestAPIKeyType: single.requestAPIKeyType,
+      getByEmployeeIDs_keys: Object.keys(single),
+      service_type_count: (await frGet("serviceType", "search", {})).serviceTypeIDs?.length ?? 0,
+    });
+  }
+
+  // 4. Full batch if single ID worked
+  const batch = ids.slice(0, 50).join(",");
+  const records = await frGet("employee", "getByEmployeeIDs", { employeeIDs: batch });
+  const propName: string = records.propertyName ?? "employees";
+  const employees = (records[propName]
+    ? Object.values(records[propName] as Record<string, unknown>)
     : []) as Record<string, unknown>[];
 
-  const techs = rawEmployees.map((e: Record<string, unknown>) => ({
+  const techs = employees.map((e) => ({
     id: e.employeeID,
     name: `${e.fname} ${e.lname}`.trim(),
     type: e.type,
@@ -36,27 +59,26 @@ export async function GET() {
     active: e.active,
   }));
 
-  // 2. Search service types with includeData
-  const stSearch = await frGet("serviceType", "search", { includeData: "1" });
+  // 5. Service types
+  const stSearch = await frGet("serviceType", "search", {});
   const stIds: number[] = stSearch.serviceTypeIDs ?? [];
-  const stPropertyName: string = stSearch.propertyName ?? "serviceTypes";
-  const rawServiceTypes = (stSearch[stPropertyName]
-    ? Object.values(stSearch[stPropertyName] as Record<string, unknown>)
+  const stBatch = stIds.slice(0, 50).join(",");
+  const stRecords = stIds.length
+    ? await frGet("serviceType", "getByServiceTypeIDs", { serviceTypeIDs: stBatch })
+    : { success: false };
+  const stPropName: string = stRecords.propertyName ?? "serviceTypes";
+  const serviceTypes = (stRecords[stPropName]
+    ? Object.values(stRecords[stPropName] as Record<string, unknown>)
     : []) as Record<string, unknown>[];
-
-  const serviceTypes = rawServiceTypes.map((s: Record<string, unknown>) => ({
-    id: s.serviceTypeID,
-    description: s.description,
-    category: s.category,
-    reservice: s.isReservice ?? s.reservice,
-  }));
 
   return NextResponse.json({
     employee_count: ids.length,
-    employee_propertyName: propertyName,
     techs,
     service_type_count: stIds.length,
-    st_propertyName: stPropertyName,
-    service_types: serviceTypes.slice(0, 20),
+    service_types: serviceTypes.slice(0, 20).map((s) => ({
+      id: s.serviceTypeID,
+      description: s.description,
+      category: s.category,
+    })),
   });
 }
