@@ -12,59 +12,31 @@ async function frGet(entity: string, action: string, params: Record<string, stri
 }
 
 export async function GET() {
-  // Step 1: search for a small batch of October appointment IDs
-  const search = await frGet("appointment", "search", {
-    status: "1",
-    dateStart: "2026-10-01",
-    dateEnd: "2026-10-01",
-  }) as { success: boolean; appointmentIDs?: number[] };
-
-  const ids = (search.appointmentIDs ?? []).slice(0, 10);
-
-  if (ids.length === 0) {
-    return NextResponse.json({ error: "No appointment IDs from search" });
+  const empSearch = await frGet("employee", "search", { status: "1" });
+  if (!empSearch.success) {
+    return NextResponse.json({ error: "FieldRoutes employee search failed", detail: empSearch.errorMessage }, { status: 500 });
   }
+  const empIds: number[] = empSearch.employeeIDs ?? [];
 
-  // Step 2: try appointment/get with those IDs
-  const detail = await frGet("appointment", "get", {
-    appointmentIDs: ids.join(","),
-  }) as {
-    success: boolean;
-    count: number;
-    propertyName?: string;
-    errorMessage?: string;
-    appointments?: Record<string, unknown>;
-  };
+  const stSearch = await frGet("serviceType", "search", {});
+  const stIds: number[] = stSearch.serviceTypeIDs ?? [];
 
-  const prop = detail.propertyName ?? "appointments";
-  const apptMap = (detail as Record<string, unknown>)[prop];
-  const appts = apptMap
-    ? (Object.values(apptMap as Record<string, unknown>) as Record<string, unknown>[])
-    : [];
-
-  const sample = appts[0];
+  const now = new Date();
+  const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  const today = now.toISOString().slice(0, 10);
+  const apptSearch = await frGet("appointment", "search", {
+    status: "1",
+    dateStart: monthStart,
+    dateEnd: today,
+  });
+  const apptIds: number[] = apptSearch.appointmentIDs ?? [];
 
   return NextResponse.json({
-    search_ids: ids,
-    get_success: detail.success,
-    get_count: detail.count,
-    get_error: detail.errorMessage ?? null,
-    sample_keys: sample ? Object.keys(sample) : [],
-    sample: sample
-      ? {
-          appointmentID: sample.appointmentID,
-          date: sample.date,
-          status: sample.status,
-          assignedEmployeeID: sample.assignedEmployeeID,
-          servicedByEmployeeID: sample.servicedByEmployeeID,
-          serviceTypeID: sample.serviceTypeID,
-          duration: sample.duration,
-          productionValue: sample.productionValue,
-          checkIn: sample.checkIn,
-          checkOut: sample.checkOut,
-          officeID: sample.officeID,
-          customerID: sample.customerID,
-        }
-      : null,
+    ok: true,
+    fieldroutes_subdomain: process.env.FIELDROUTES_SUBDOMAIN ?? "aversepest",
+    active_employee_count: empIds.length,
+    service_type_count: stIds.length,
+    completed_appts_this_month: apptIds.length,
+    appt_date_range: { from: monthStart, to: today },
   });
 }
