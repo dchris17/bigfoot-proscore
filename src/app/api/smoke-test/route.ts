@@ -12,67 +12,39 @@ async function frGet(entity: string, action: string, params: Record<string, stri
 }
 
 export async function GET() {
-  // 1. Confirm employee count
+  // Employee count
   const empSearch = await frGet("employee", "search", { status: "1" });
+  if (!empSearch.success) {
+    return NextResponse.json({ error: "FieldRoutes employee search failed", detail: empSearch.errorMessage }, { status: 500 });
+  }
   const empIds: number[] = empSearch.employeeIDs ?? [];
 
-  // 2. Get a sample appointment to see full data structure
-  const apptSearch = await frGet("appointment", "search", {
-    status: "1",
-    dateStart: "2026-10-14",
-    dateEnd: "2026-10-14",
-  });
-  const apptIds: number[] = apptSearch.appointmentIDs ?? [];
-
-  // 3. Fetch one appointment using 'get' action
-  let sampleAppt: Record<string, unknown> | null = null;
-  let apptGetError = null;
-  if (apptIds.length > 0) {
-    const apptGet = await frGet("appointment", "get", { appointmentID: String(apptIds[0]) });
-    const propName: string = apptGet.propertyName ?? "appointments";
-    if (apptGet.success && apptGet[propName]) {
-      const appts = Object.values(apptGet[propName] as Record<string, unknown>);
-      if (appts.length > 0) {
-        const a = appts[0] as Record<string, unknown>;
-        sampleAppt = {
-          appointmentID: a.appointmentID,
-          assignedEmployeeID: a.assignedEmployeeID,
-          servicedByEmployeeID: a.servicedByEmployeeID,
-          techName: a.techName,
-          employeeName: a.employeeName,
-          date: a.date,
-          status: a.status,
-          type: a.type,
-          serviceType: a.serviceType,
-          duration: a.duration,
-          allKeys: Object.keys(a),
-        };
-      }
-    } else {
-      apptGetError = { success: apptGet.success, error: apptGet.errorMessage, propName };
-    }
-  }
-
-  // 4. Service type search
+  // Service type count
   const stSearch = await frGet("serviceType", "search", {});
   const stIds: number[] = stSearch.serviceTypeIDs ?? [];
 
-  // 5. Try serviceType/get
-  const stGet = stIds.length > 0
-    ? await frGet("serviceType", "get", { serviceTypeID: String(stIds[0]) })
-    : null;
-  const stPropName = stGet?.propertyName ?? "serviceTypes";
-  const stSample = stGet?.success && stGet?.[stPropName]
-    ? Object.values(stGet[stPropName] as Record<string, unknown>)[0]
-    : null;
+  // Appointment count for current month
+  const now = new Date();
+  const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  const today = now.toISOString().slice(0, 10);
+  const apptSearch = await frGet("appointment", "search", {
+    status: "1",
+    dateStart: monthStart,
+    dateEnd: today,
+  });
+  const apptIds: number[] = apptSearch.appointmentIDs ?? [];
 
   return NextResponse.json({
-    employee_count: empIds.length,
-    appt_count_oct14: apptIds.length,
-    sample_appointment: sampleAppt,
-    appt_get_error: apptGetError,
+    ok: true,
+    fieldroutes_subdomain: process.env.FIELDROUTES_SUBDOMAIN ?? "aversepest",
+    // Counts confirmed via search (search endpoint works with standard API key)
+    active_employee_count: empIds.length,
     service_type_count: stIds.length,
-    service_type_get_success: stGet?.success,
-    service_type_sample: stSample,
+    // Appointments this month (status=1 = completed)
+    completed_appts_this_month: apptIds.length,
+    appt_date_range: { from: monthStart, to: today },
+    // Note: employee/get and appointment/get require a higher-privilege API key
+    // For Phase 1 sync: need admin API key to fetch full employee/appointment records
+    note: "employee details (names, types) require an admin-level FieldRoutes API key — standard key returns IDs only",
   });
 }
