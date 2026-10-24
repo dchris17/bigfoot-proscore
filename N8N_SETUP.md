@@ -104,3 +104,25 @@ Without this credential (or if the values don't match) the sync endpoint returns
 After running, check the Reviews tab in The Footprint. Reviews should appear with auto-matched techs where possible. Unmatched ones can be assigned manually from the Reviews tab.
 
 To add more locations later: just add another entry to the **Locations** node in n8n.
+
+---
+
+## Nightly data sync (FieldRoutes + Bouncie)
+
+The leaderboard reads appointments and trips from the database, so they need a nightly refresh.
+n8n calls `POST /api/cron/sync` at 3:00 AM Boise time. Each run re-syncs the current month plus the
+3 days before it: FieldRoutes completed and cancelled appointments, then Bouncie vehicles and trips.
+A run takes a few minutes. Each source writes a `SyncRun` row.
+
+1. Generate a long random value (`openssl rand -hex 32`).
+2. In Railway, open the **bigfoot-proscore** service → **Variables** and add `CRON_SECRET` with that value.
+3. In n8n, go to **Credentials → New** → "Header Auth":
+   - **Credential name**: `Footprint Cron Secret`
+   - **Name**: `x-footprint-cron-secret`
+   - **Value**: *(the same value you put in Railway)*
+4. **Workflows → Import from File** → `n8n-workflow-nightly-sync.json`.
+5. Open the **Run Footprint Sync** node → under Authentication, select `Footprint Cron Secret`.
+6. Click **Activate**. Hit **Execute** once to check it: a 200 response with `"ok": true` means both sources synced.
+
+The response lists counts and errors for each source. A 500 means one of them failed, and n8n marks that execution as failed.
+To run the same sync by hand with production env loaded: `npm run worker`.
