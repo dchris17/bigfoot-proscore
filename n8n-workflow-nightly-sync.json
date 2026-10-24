@@ -1,0 +1,38 @@
+{
+  "name": "Footprint Nightly Sync",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "days", "daysInterval": 1, "triggerAtHour": 3, "triggerAtMinute": 0 }] }
+      },
+      "id": "nightly-3am",
+      "name": "Nightly 3AM Boise",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://bigfoot-proscore-production.up.railway.app/api/cron/sync",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": { "timeout": 900000 }
+      },
+      "id": "run-sync",
+      "name": "Run Footprint Sync",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300],
+      "credentials": {
+        "httpHeaderAuth": { "id": "FOOTPRINT_CRON_CREDENTIAL_ID", "name": "Footprint Cron Secret" }
+      }
+    }
+  ],
+  "connections": {
+    "Nightly 3AM Boise": { "main": [[{ "node": "Run Footprint Sync", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1", "timezone": "America/Boise" },
+  "versionId": "1"
+}
