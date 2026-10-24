@@ -57,6 +57,8 @@
     {
       "parameters": {
         "url": "https://bigfoot-proscore-production.up.railway.app/api/reviews/sync",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [{ "name": "Content-Type", "value": "application/json" }]
@@ -70,7 +72,10 @@
       "name": "POST to Footprint Sync",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [1120, 300]
+      "position": [1120, 300],
+      "credentials": {
+        "httpHeaderAuth": { "id": "FOOTPRINT_SYNC_CREDENTIAL_ID", "name": "Footprint Sync Secret" }
+      }
     }
   ],
   "connections": {

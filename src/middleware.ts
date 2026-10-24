@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const PROTECTED_PREFIXES = ["/settings"];
+// Manager-only pages. API routes check isAdmin() themselves.
+const PROTECTED_PREFIXES = ["/settings", "/admin", "/setup"];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
@@ -10,9 +11,11 @@ export function middleware(req: NextRequest) {
   if (!isProtected) return NextResponse.next();
 
   const token = req.cookies.get("fp_admin")?.value;
-  const expected = process.env.ADMIN_SECRET ?? "footprint-dev-secret-change-me";
+  const expected =
+    process.env.ADMIN_SECRET ||
+    (process.env.NODE_ENV === "production" ? null : "footprint-dev-secret-change-me");
 
-  if (!token || token !== expected) {
+  if (!expected || !token || token !== expected) {
     const url = req.nextUrl.clone();
     url.pathname = "/pin";
     url.searchParams.set("next", pathname);
@@ -23,5 +26,5 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/settings/:path*"],
+  matcher: ["/settings/:path*", "/admin/:path*", "/setup/:path*"],
 };

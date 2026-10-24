@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
@@ -40,7 +41,21 @@ function matchTech(
   return null;
 }
 
+// n8n sends REVIEWS_SYNC_SECRET in this header (see N8N_SETUP.md).
+function hasSyncSecret(req: NextRequest): boolean {
+  const expected = process.env.REVIEWS_SYNC_SECRET;
+  const given = req.headers.get("x-footprint-sync-secret");
+  if (!expected || !given) return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 export async function POST(req: NextRequest) {
+  if (!hasSyncSecret(req)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const body = await req.json() as { reviews: IncomingReview[] };
   if (!Array.isArray(body.reviews)) {
     return NextResponse.json({ error: "Expected { reviews: [...] }" }, { status: 400 });

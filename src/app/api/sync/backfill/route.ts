@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { isAdmin } from "@/app/pin/actions";
 
 const BASE_URL = `https://${process.env.FIELDROUTES_SUBDOMAIN ?? "aversepest"}.pestroutes.com/api`;
 
@@ -48,6 +49,9 @@ interface FRAppointment {
 }
 
 export async function POST(req: NextRequest) {
+  if (!(await isAdmin())) {
+    return NextResponse.json({ error: "Manager PIN required" }, { status: 401 });
+  }
   const body = await req.json() as { months?: string[] };
   const months = body.months ?? ["2026-08", "2026-09", "2026-10"];
 

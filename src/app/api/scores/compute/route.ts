@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { computeProScore, GOALS, KpiInput } from "@/lib/scoring/engine";
+import { isAdmin } from "@/app/pin/actions";
 
 function daysInMonth(year: number, month: number) {
   return new Date(year, month, 0).getDate();
@@ -14,6 +15,9 @@ function daysElapsed(year: number, month: number): number {
 }
 
 export async function POST(req: NextRequest) {
+  if (!(await isAdmin())) {
+    return NextResponse.json({ error: "Manager PIN required" }, { status: 401 });
+  }
   const body = await req.json() as { month?: string };
   const month = body.month ?? new Date().toISOString().slice(0, 7); // "2026-10"
   const [year, mon] = month.split("-").map(Number);

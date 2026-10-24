@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getVehicles, getTrips } from "@/lib/bouncie/client";
+import { isAdmin } from "@/app/pin/actions";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = prisma as any;
 
 export async function POST(req: NextRequest) {
+  if (!(await isAdmin())) {
+    return NextResponse.json({ error: "Manager PIN required" }, { status: 401 });
+  }
   const body = await req.json() as { month?: string };
   const now = new Date();
   const year = now.getFullYear();

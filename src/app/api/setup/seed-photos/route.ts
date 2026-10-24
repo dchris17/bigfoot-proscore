@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { isAdmin } from "@/app/pin/actions";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = prisma as any;
@@ -20,6 +21,9 @@ const PHOTO_MAP: Record<string, string> = {
 };
 
 export async function POST() {
+  if (!(await isAdmin())) {
+    return NextResponse.json({ error: "Manager PIN required" }, { status: 401 });
+  }
   const techs: { id: string; name: string }[] = await db.tech.findMany({
     select: { id: true, name: true },
   });

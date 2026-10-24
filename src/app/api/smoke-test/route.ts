@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isAdmin } from "@/app/pin/actions";
 
 const BASE_URL = `https://${process.env.FIELDROUTES_SUBDOMAIN ?? "aversepest"}.pestroutes.com/api`;
 
@@ -12,6 +13,9 @@ async function frGet(entity: string, action: string, params: Record<string, stri
 }
 
 export async function GET() {
+  if (!(await isAdmin())) {
+    return NextResponse.json({ error: "Manager PIN required" }, { status: 401 });
+  }
   const empSearch = await frGet("employee", "search", { status: "1" });
   if (!empSearch.success) {
     return NextResponse.json({ error: "FieldRoutes employee search failed", detail: empSearch.errorMessage }, { status: 500 });

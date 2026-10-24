@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
+import { isAdmin } from "@/app/pin/actions";
 
 const BASE_URL = `https://${process.env.FIELDROUTES_SUBDOMAIN ?? "aversepest"}.pestroutes.com/api`;
 
 export async function GET() {
+  if (!(await isAdmin())) {
+    return NextResponse.json({ error: "Manager PIN required" }, { status: 401 });
+  }
   const url = new URL(`${BASE_URL}/employee/search`);
   url.searchParams.set("authenticationKey", process.env.FIELDROUTES_AUTH_KEY ?? "");
   url.searchParams.set("authenticationToken", process.env.FIELDROUTES_AUTH_TOKEN ?? "");

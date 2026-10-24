@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { isAdmin } from "@/app/pin/actions";
 
 type Role = "technician" | "admin" | "manager";
 
@@ -11,6 +12,9 @@ interface EmployeeInput {
 }
 
 export async function POST(req: NextRequest) {
+  if (!(await isAdmin())) {
+    return NextResponse.json({ error: "Manager PIN required" }, { status: 401 });
+  }
   const body = await req.json() as { employees: EmployeeInput[] };
   const employees = body.employees ?? [];
 

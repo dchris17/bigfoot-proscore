@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { isAdmin } from "@/app/pin/actions";
 
 // Stamps isReservice on Appointment rows.
 // Type 3 = "Reservice" (abbreviation: RS, category: GENERAL) — confirmed from FR service type list.
@@ -7,6 +8,9 @@ import { prisma } from "@/lib/prisma";
 const RESERVICE_TYPE_IDS = ["3"];
 
 export async function POST() {
+  if (!(await isAdmin())) {
+    return NextResponse.json({ error: "Manager PIN required" }, { status: 401 });
+  }
   try {
     const typeList = RESERVICE_TYPE_IDS.map(id => `'${id}'`).join(",");
 

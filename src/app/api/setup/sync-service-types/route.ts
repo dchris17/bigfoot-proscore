@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { isAdmin } from "@/app/pin/actions";
 
 const BASE_URL = `https://${process.env.FIELDROUTES_SUBDOMAIN ?? "aversepest"}.pestroutes.com/api`;
 
@@ -21,6 +22,9 @@ interface FRServiceType {
 }
 
 export async function POST() {
+  if (!(await isAdmin())) {
+    return NextResponse.json({ error: "Manager PIN required" }, { status: 401 });
+  }
   try {
     // Get the distinct type values from our appointment rawJson (these are serviceTypeIDs)
     const rows = await prisma.$queryRaw<{ type: string; cnt: bigint }[]>`

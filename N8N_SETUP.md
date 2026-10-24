@@ -71,6 +71,20 @@ Once API access is approved:
    - **Scope**: `https://www.googleapis.com/auth/business.manage`
 5. Save → click **Connect** → authorize with your Google account that manages GBP
 
+### Footprint sync secret
+
+The Footprint only accepts reviews from n8n when the request carries a shared secret.
+
+1. Generate a long random value (for example `openssl rand -hex 32`).
+2. In Railway, open the **bigfoot-proscore** service → **Variables** and add `REVIEWS_SYNC_SECRET` with that value.
+3. In n8n, go to **Credentials → New** → search "Header Auth" and fill in:
+   - **Credential name**: `Footprint Sync Secret`
+   - **Name**: `x-footprint-sync-secret`
+   - **Value**: *(the same value you put in Railway)*
+4. Save.
+
+Without this credential (or if the values don't match) the sync endpoint returns 401.
+
 ---
 
 ## Step 5 — Import and Configure Workflow
@@ -79,8 +93,9 @@ Once API access is approved:
 2. Import `n8n-workflow-gbp-reviews.json` (in this repo root)
 3. Open the **Locations** node → replace the placeholder location IDs with your real ones
 4. Open the **Fetch Reviews from GBP** node → select your Google credential
-5. Click **Activate** to turn on the nightly schedule
-6. Hit **Execute** once manually to do the first sync
+5. Open the **POST to Footprint Sync** node → under Authentication, select the `Footprint Sync Secret` Header Auth credential
+6. Click **Activate** to turn on the nightly schedule
+7. Hit **Execute** once manually to do the first sync
 
 ---
 
