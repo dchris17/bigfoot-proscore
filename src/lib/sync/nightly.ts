@@ -1,6 +1,7 @@
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
-import { syncFieldRoutesAppointments, type FieldRoutesSyncResult } from "./fieldroutes";
+import { monthRange, syncFieldRoutesAppointments, type FieldRoutesSyncResult } from "./fieldroutes";
 import { syncBouncieTrips, type BouncieSyncResult } from "./bouncie";
+import { syncServiceTypes } from "./serviceTypes";
 
 const TIMEZONE = process.env.APP_TIMEZONE || "America/Boise";
 
@@ -11,22 +12,25 @@ const LOOKBACK_DAYS = 3;
 export interface NightlyWindow {
   timezone: string;
   dateStart: string; // YYYY-MM-DD in TIMEZONE, inclusive
-  dateEnd: string;   // YYYY-MM-DD in TIMEZONE (today), inclusive
+  dateEnd: string;   // YYYY-MM-DD in TIMEZONE, inclusive: end of the current month
   startsAt: Date;    // midnight of dateStart in TIMEZONE
   endsAt: Date;      // now
 }
 
-/** Current month (in Boise time) plus the previous LOOKBACK_DAYS days, through today. */
+/**
+ * The whole current month (in Boise time) plus the previous LOOKBACK_DAYS days.
+ * Runs to month end so pending appointments later this month are counted as scheduled.
+ */
 export function nightlyWindow(now: Date = new Date()): NightlyWindow {
   const today = formatInTimeZone(now, TIMEZONE, "yyyy-MM-dd");
-  const monthStart = `${today.slice(0, 7)}-01`;
+  const { dateStart: monthStart, dateEnd: monthEnd } = monthRange(today.slice(0, 7));
   const [y, m, d] = today.split("-").map(Number);
   const lookback = new Date(Date.UTC(y, m - 1, d - LOOKBACK_DAYS)).toISOString().slice(0, 10);
   const dateStart = lookback < monthStart ? lookback : monthStart;
   return {
     timezone: TIMEZONE,
     dateStart,
-    dateEnd: today,
+    dateEnd: monthEnd,
     startsAt: fromZonedTime(`${dateStart}T00:00:00`, TIMEZONE),
     endsAt: now,
   };
@@ -36,6 +40,7 @@ export interface NightlySyncResult {
   ok: boolean;
   window: { timezone: string; dateStart: string; dateEnd: string };
   fieldroutes: FieldRoutesSyncResult | { error: string };
+  serviceTypes: { upserted: number } | { error: string };
   bouncie: BouncieSyncResult | { error: string };
   durationSeconds: number;
 }
@@ -69,6 +74,14 @@ async function doNightlySync(now: Date): Promise<NightlySyncResult> {
     ok = false;
   }
 
+  let serviceTypes: NightlySyncResult["serviceTypes"];
+  try {
+    serviceTypes = { upserted: (await syncServiceTypes()).upserted };
+  } catch (e) {
+    serviceTypes = { error: message(e) };
+    ok = false;
+  }
+
   let bouncie: NightlySyncResult["bouncie"];
   try {
     bouncie = await syncBouncieTrips(w.startsAt, w.endsAt);
@@ -83,6 +96,7 @@ async function doNightlySync(now: Date): Promise<NightlySyncResult> {
     ok,
     window: { timezone: w.timezone, dateStart: w.dateStart, dateEnd: w.dateEnd },
     fieldroutes,
+    serviceTypes,
     bouncie,
     durationSeconds: Math.round((Date.now() - started) / 1000),
   };

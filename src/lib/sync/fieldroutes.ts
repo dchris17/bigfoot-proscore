@@ -9,7 +9,7 @@ const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 const RATE_LIMIT_RE = /maximum number of .*requests/i;
 const RATE_LIMIT_RETRIES = 4;
 
-async function frGet(entity: string, action: string, params: Record<string, string>) {
+export async function frGet(entity: string, action: string, params: Record<string, string> = {}) {
   const url = new URL(`${BASE_URL}/${entity}/${action}`);
   url.searchParams.set("authenticationKey", process.env.FIELDROUTES_AUTH_KEY ?? "");
   url.searchParams.set("authenticationToken", process.env.FIELDROUTES_AUTH_TOKEN ?? "");
@@ -19,7 +19,7 @@ async function frGet(entity: string, action: string, params: Record<string, stri
     const data = await res.json();
     const rateLimited = data?.success === false && RATE_LIMIT_RE.test(String(data.errorMessage ?? ""));
     if (!rateLimited || attempt >= RATE_LIMIT_RETRIES) return data;
-    await delay(61_000);
+    await delay(65_000);
   }
 }
 
@@ -37,6 +37,37 @@ export function monthRange(month: string): { dateStart: string; dateEnd: string 
   return { dateStart: `${year}-${mm}-01`, dateEnd: `${year}-${mm}-${String(lastDay).padStart(2, "0")}` };
 }
 
+// FieldRoutes appointment statuses: 0 Pending, 1 Completed, 2 No-show, -1 Cancelled, -2 Re-scheduled.
+// Driven's reservice denominator counts every scheduled appointment, so sync them all;
+// KPIs that only want completed work filter status = 1.
+export const ALL_STATUSES = ["1", "2", "0", "-1", "-2"];
+
+/** FR sends "0" or null for "no employee". */
+function employeeId(v: unknown): number | null {
+  const n = typeof v === "string" ? parseInt(v) : NaN;
+  return n > 0 ? n : null;
+}
+
+/** routeID → route.assignedTech, fetched in batches and cached for the run. */
+async function loadRouteTechs(routeIds: string[], cache: Map<string, number | null>, errors: string[], label: string) {
+  const missing = [...new Set(routeIds)].filter(id => id && id !== "0" && !cache.has(id));
+  for (const rBatch of chunks(missing, 100)) {
+    const rRes = await frGet("route", "get", { routeIDs: rBatch.join(",") }) as {
+      success: boolean;
+      propertyName?: string;
+      errorMessage?: string;
+      [key: string]: unknown;
+    };
+    if (!rRes.success) {
+      errors.push(`${label} routes: get failed — ${rRes.errorMessage ?? "unknown"}`);
+      continue;
+    }
+    const raw = rRes[rRes.propertyName ?? "routes"];
+    const routes = (Array.isArray(raw) ? raw : Object.values(raw ?? {})) as Array<{ routeID: string; assignedTech: string }>;
+    for (const r of routes) cache.set(r.routeID, employeeId(r.assignedTech));
+  }
+}
+
 interface FRAppointment {
   appointmentID: string;
   officeID: string;
@@ -48,7 +79,8 @@ interface FRAppointment {
   status: string;
   type: string;
   employeeID: string;
-  servicedBy: string;
+  servicedBy: string | null;
+  routeID: string;
   productionValue: string;
   checkIn: string | null;
   checkOut: string | null;
@@ -78,10 +110,13 @@ export class BranchNotFoundError extends Error {
 }
 
 /**
- * Pull completed and cancelled appointments for each date range from FieldRoutes
+ * Pull appointments (every status by default) for each date range from FieldRoutes
  * and upsert them into Appointment. Records a SyncRun row (source "fieldroutes").
  */
-export async function syncFieldRoutesAppointments(ranges: FieldRoutesRange[]): Promise<FieldRoutesSyncResult> {
+export async function syncFieldRoutesAppointments(
+  ranges: FieldRoutesRange[],
+  { statuses = ALL_STATUSES }: { statuses?: string[] } = {},
+): Promise<FieldRoutesSyncResult> {
   // Look up branch
   const branch = await prisma.branch.findFirst({ where: { fieldroutesOfficeId: 1 } });
   if (!branch) throw new BranchNotFoundError();
@@ -98,12 +133,12 @@ export async function syncFieldRoutesAppointments(ranges: FieldRoutesRange[]): P
   let totalSkipped = 0;
   const errors: string[] = [];
   const rangeCounts: Record<string, number> = {};
+  const routeTechs = new Map<string, number | null>();
 
   try {
     for (const { label, dateStart, dateEnd } of ranges) {
-      // Search for completed (1) and cancelled/no-show (2) appointments
       const allIds: number[] = [];
-      for (const status of ["1", "2"]) {
+      for (const status of statuses) {
         const searchRes = await frGet("appointment", "search", {
           status,
           dateStart,
@@ -120,8 +155,8 @@ export async function syncFieldRoutesAppointments(ranges: FieldRoutesRange[]): P
       const ids = [...new Set(allIds)];
       let rangeCount = 0;
 
-      // Fetch in batches of 100 with rate-limit pacing (4s between batches keeps ~30 calls/min)
-      for (const batch of chunks(ids, 100)) {
+      // Fetch in batches of 200 (larger batches fail) with 4s pacing; frGet retries if we still hit 60/min
+      for (const batch of chunks(ids, 200)) {
         await delay(4000);
         const getRes = await frGet("appointment", "get", {
           appointmentIDs: batch.join(","),
@@ -165,6 +200,10 @@ export async function syncFieldRoutesAppointments(ranges: FieldRoutesRange[]): P
           }
         }
 
+        // The tech who ran the route. Non-completed appointments have servicedBy "0",
+        // and employeeID is whoever booked it, so the route is the only reliable tech.
+        await loadRouteTechs(appts.map(a => a.routeID), routeTechs, errors, label);
+
         for (const a of appts) {
           try {
             const apptDate = new Date(a.date);
@@ -179,12 +218,15 @@ export async function syncFieldRoutesAppointments(ranges: FieldRoutesRange[]): P
 
             const isReservice = a.type === "3"; // service type 3 = Reservice (RS)
 
+            const servicedBy = employeeId(a.servicedBy);
+            const assignedTech = routeTechs.get(a.routeID) ?? servicedBy ?? employeeId(a.employeeID) ?? 0;
+
             const fields = {
               rawJson: a as object,
               date: apptDate,
               status: parseInt(a.status),
-              assignedEmployeeId: parseInt(a.employeeID),
-              servicedByEmployeeId: a.servicedBy ? parseInt(a.servicedBy) : null,
+              assignedEmployeeId: assignedTech,
+              servicedByEmployeeId: servicedBy,
               isReservice,
               productionValue: production,
               checkIn,
