@@ -1,8 +1,11 @@
 /**
- * Driven-style "Average Driving Score". Checked against Driven's October 2026 drill-downs
- * (Marc 95: 12 hard brakes + 2 rapid accels, Troy 93: 11 + 4, both counts exact to Bouncie)
- * and its leaderboard: every tech Driven has Bouncie data for matches except Larry
- * (model 95.6, Driven 95), for Oct to date and for its Oct 1–13 export.
+ * Driven-style "Average Driving Score". Checked against Driven's leaderboard for Sep 2026,
+ * its Oct 1–13 export and Oct to date: 21 of 24 exact for the 8 techs Driven has Bouncie
+ * data for. Its drill-downs (Marc, Troy, Arturo, Larry, Calvert) have the same hard brake
+ * and rapid accel counts as our trips, and each of the 3 misses is a data difference:
+ * - Larry Oct (96 vs 95) and Arturo Sep (93 vs 92): Driven has 1 Idle Event we can't see.
+ *   From Troy's and Arturo's, one costs about 12 points on its day (11.4–12).
+ * - Calvert Sep (93 vs 94): Driven has 10 hard brakes, Bouncie's trips have 11.
  *
  * - Each day the tech drove gets a score: 100 − 24 × hard events per hour of trip time,
  *   where trip time is start to end of every trip that day (idling included).
@@ -10,8 +13,9 @@
  * - The month is the plain average of those day scores, rounded. Days with no trips
  *   don't count either way.
  * - Days follow the trip's own local time (Bouncie's timeZone on the trip).
- * - Not yet modelled: Driven's "Idle Event" (Troy has 1). The trip API only gives total
- *   idle time per trip, and no threshold on that matches Driven for both Larry and Lucca.
+ * - Not modelled: Driven's Idle Event. Bouncie's trip API only gives total idle time per
+ *   trip (no point timestamps), and no threshold on that matches Driven's counts: Arturo's
+ *   Sep event has no trip over 32 min of idle, while Lucca's 44 min trip isn't one.
  *   Speed Alerts are 0 for everyone in Driven.
  * - Driven shows 100 when it has no Bouncie data for a tech (Jake, Noah Walters in Oct
  *   2026). We score their trucks instead.
