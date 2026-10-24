@@ -2,13 +2,25 @@ import { prisma } from "@/lib/prisma";
 
 const BASE_URL = `https://${process.env.FIELDROUTES_SUBDOMAIN ?? "aversepest"}.pestroutes.com/api`;
 
+const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+// FieldRoutes allows 60 reads/min per key, shared with anything else using it.
+// When we hit that, wait out the minute and retry instead of dropping the batch.
+const RATE_LIMIT_RE = /maximum number of .*requests/i;
+const RATE_LIMIT_RETRIES = 4;
+
 async function frGet(entity: string, action: string, params: Record<string, string>) {
   const url = new URL(`${BASE_URL}/${entity}/${action}`);
   url.searchParams.set("authenticationKey", process.env.FIELDROUTES_AUTH_KEY ?? "");
   url.searchParams.set("authenticationToken", process.env.FIELDROUTES_AUTH_TOKEN ?? "");
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-  const res = await fetch(url.toString(), { next: { revalidate: 0 } });
-  return res.json();
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(url.toString(), { next: { revalidate: 0 } });
+    const data = await res.json();
+    const rateLimited = data?.success === false && RATE_LIMIT_RE.test(String(data.errorMessage ?? ""));
+    if (!rateLimited || attempt >= RATE_LIMIT_RETRIES) return data;
+    await delay(61_000);
+  }
 }
 
 function chunks<T>(arr: T[], size: number): T[][] {
@@ -16,8 +28,6 @@ function chunks<T>(arr: T[], size: number): T[][] {
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
 }
-
-const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 /** "2026-10" → first and last day of that month as YYYY-MM-DD. */
 export function monthRange(month: string): { dateStart: string; dateEnd: string } {
@@ -140,7 +150,9 @@ export async function syncFieldRoutesAppointments(ranges: FieldRoutesRange[]): P
               propertyName?: string;
               [key: string]: unknown;
             };
-            if (tRes.success) {
+            if (!tRes.success) {
+              errors.push(`${label} tickets: get failed — ${String(tRes.errorMessage ?? "unknown")}`);
+            } else {
               const tProp = tRes.propertyName ?? "tickets";
               const ticketArr = tRes[tProp] as Array<{ ticketID: string; serviceCharge: string }> | undefined;
               if (ticketArr) {
