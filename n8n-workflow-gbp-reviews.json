@@ -1,0 +1,85 @@
+{
+  "name": "GBP Reviews Sync",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "hours", "hoursInterval": 24 }] },
+        "triggerAtHour": 2
+      },
+      "id": "schedule-trigger",
+      "name": "Nightly 2AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Add each GBP location here.\n// Find locationId via: GET https://mybusiness.googleapis.com/v4/accounts/{accountId}/locations\n// accountId looks like: accounts/123456789\n// locationId looks like: accounts/123456789/locations/987654321\n\nconst locations = [\n  { locationId: 'accounts/ACCOUNT_ID/locations/LOCATION_ID_1', locationName: 'Bigfoot Pest Control - Boise' },\n  { locationId: 'accounts/ACCOUNT_ID/locations/LOCATION_ID_2', locationName: 'Bigfoot Pest Control - Location 2' },\n  { locationId: 'accounts/ACCOUNT_ID/locations/LOCATION_ID_3', locationName: 'Bigfoot Pest Control - Location 3' },\n];\n\nreturn locations.map(l => ({ json: l }));"
+      },
+      "id": "locations",
+      "name": "Locations",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://mybusiness.googleapis.com/v4/{{ $json.locationId }}/reviews",
+        "authentication": "oAuth2",
+        "genericAuthType": "oAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "pageSize", "value": "50" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-reviews",
+      "name": "Fetch Reviews from GBP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [680, 300],
+      "credentials": {
+        "oAuth2Api": { "id": "GBP_OAUTH_CREDENTIAL_ID", "name": "Google Business Profile OAuth2" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Transform GBP review format to our sync endpoint format\nconst locationId = $('Locations').item.json.locationId;\nconst locationName = $('Locations').item.json.locationName;\nconst reviews = $input.item.json.reviews ?? [];\n\nconst transformed = reviews.map(r => ({\n  id: r.reviewId,\n  locationId,\n  locationName,\n  authorName: r.reviewer?.displayName ?? 'Anonymous',\n  rating: r.starRating,   // 'FIVE', 'FOUR', etc. — our endpoint handles this\n  text: r.comment ?? '',\n  reviewDate: r.createTime,\n  rawJson: r,\n}));\n\nif (transformed.length === 0) return [];\nreturn [{ json: { reviews: transformed } }];"
+      },
+      "id": "transform",
+      "name": "Transform to Sync Format",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://bigfoot-proscore-production.up.railway.app/api/reviews/sync",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Content-Type", "value": "application/json" }]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "post-to-sync",
+      "name": "POST to Footprint Sync",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1120, 300]
+    }
+  ],
+  "connections": {
+    "Nightly 2AM": { "main": [[{ "node": "Locations", "type": "main", "index": 0 }]] },
+    "Locations": { "main": [[{ "node": "Fetch Reviews from GBP", "type": "main", "index": 0 }]] },
+    "Fetch Reviews from GBP": { "main": [[{ "node": "Transform to Sync Format", "type": "main", "index": 0 }]] },
+    "Transform to Sync Format": { "main": [[{ "node": "POST to Footprint Sync", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "versionId": "1"
+}

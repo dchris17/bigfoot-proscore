@@ -1,39 +1,23 @@
 export const dynamic = "force-dynamic";
 
 import { prisma } from "@/lib/prisma";
-import { computeProScore, GOALS, KpiInput, denseRank } from "@/lib/scoring/engine";
+import { computeProScore, GOALS, type KpiInput, denseRank } from "@/lib/scoring/engine";
+import { getGoals } from "@/lib/goals";
+import { computeDrivingScore } from "@/lib/bouncie/client";
+import {
+  FootprintShell,
+  Leaderboard,
+  MonthPicker,
+  toFpKpis,
+  type FpTech,
+} from "@/components/footprint";
+import { isAdmin } from "@/app/pin/actions";
 
-// Brand colors
-const GREEN  = "#255b49";
-const ORANGE = "#e54900";
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const db = prisma as any;
 
-const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 
-// Card gradient for each rank/slot
-function cardGradient(rank: number, idx: number): string {
-  if (rank === 1) return `linear-gradient(160deg, #e54900 0%, #a33200 100%)`; // orange — top dog
-  if (rank === 2) return `linear-gradient(160deg, #255b49 0%, #163d30 100%)`; // brand green
-  if (rank === 3) return `linear-gradient(160deg, #1e4a3a 0%, #122e24 100%)`; // darker green
-  // Remaining: alternate between two green shades so the grid feels cohesive
-  return idx % 2 === 0
-    ? `linear-gradient(160deg, #1a3d30 0%, #0f2620 100%)`
-    : `linear-gradient(160deg, #163328 0%, #0c1f18 100%)`;
-}
-
-function scoreTextColor(score: number): string {
-  if (score >= 80) return ORANGE;   // high scores pop in brand orange
-  if (score >= 60) return "#f59e0b"; // amber warning
-  return "#f87171";                  // red for low
-}
-
-function initials(name: string) {
-  return name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
-}
-
-function currentMonth() {
-  const now = new Date();
-  return { year: now.getFullYear(), mon: now.getMonth() + 1 };
-}
 function daysInMonth(year: number, mon: number) { return new Date(year, mon, 0).getDate(); }
 function daysElapsed(year: number, mon: number) {
   const today = new Date();
@@ -41,29 +25,91 @@ function daysElapsed(year: number, mon: number) {
     ? today.getDate() : daysInMonth(year, mon);
 }
 
-async function getLeaderboard(year: number, mon: number) {
+async function getLeaderboard(year: number, mon: number, goals: typeof GOALS) {
   const monthStart = new Date(year, mon - 1, 1);
   const monthEnd   = new Date(year, mon, 1);
   const dm = daysInMonth(year, mon);
   const de = daysElapsed(year, mon);
 
-  const [appts, techs] = await Promise.all([
+  const [monthAppts, attendanceRows, techs, monthTrips, fiveStarReviews] = await Promise.all([
     prisma.appointment.findMany({
       where: { date: { gte: monthStart, lt: monthEnd }, status: 1 },
       select: {
-        assignedEmployeeId: true, servicedByEmployeeId: true,
-        productionValue: true, checkIn: true, checkOut: true, rawJson: true,
+        id: true, assignedEmployeeId: true, servicedByEmployeeId: true,
+        productionValue: true, checkIn: true, checkOut: true, date: true,
+        isReservice: true, rawJson: true, customerId: true,
       },
     }),
-    prisma.tech.findMany({
+    db.attendance.findMany({
+      where: { year, month: mon },
+      select: { techId: true, callouts: true, workingDays: true },
+    }) as Promise<{ techId: string; callouts: number; workingDays: number }[]>,
+    db.tech.findMany({
       where: { included: true, active: true },
-      select: { id: true, name: true, firstName: true, fieldroutesEmployeeId: true },
-    }),
+      select: { id: true, name: true, firstName: true, fieldroutesEmployeeId: true, photoUrl: true, branch: { select: { name: true } } },
+    }) as Promise<{ id: string; name: string; firstName: string; fieldroutesEmployeeId: number; photoUrl: string | null; branch: { name: string } }[]>,
+    db.trip.findMany({
+      where: { startedAt: { gte: monthStart, lt: monthEnd } },
+      select: { attributedTechId: true, distanceMiles: true, hardBrakes: true, hardAccels: true },
+    }) as Promise<{ attributedTechId: string | null; distanceMiles: number; hardBrakes: number; hardAccels: number }[]>,
+    db.$queryRawUnsafe(
+      `SELECT "attributedTechId", COUNT(*)::int as count FROM "Review"
+       WHERE "reviewDate" >= $1 AND "reviewDate" < $2 AND rating = 5 AND "attributedTechId" IS NOT NULL
+       GROUP BY "attributedTechId"`,
+      monthStart.toISOString(), monthEnd.toISOString()
+    ).catch(() => []) as Promise<{ attributedTechId: string; count: number }[]>,
   ]);
 
-  const rows = techs.map((tech) => {
+  // Driven-style reservice attribution
+  const reserviceAppts = monthAppts.filter(a => a.isReservice);
+  const customerToTech = new Map<number, number>();
+
+  if (reserviceAppts.length > 0) {
+    const customerToReserviceDate = new Map<number, Date>();
+    for (const ra of reserviceAppts) {
+      const raw = ra.rawJson as Record<string, unknown>;
+      const cid = raw.customerID ? parseInt(raw.customerID as string) : null;
+      if (cid) {
+        const raDate = ra.checkIn ?? ra.date;
+        const existing = customerToReserviceDate.get(cid);
+        if (!existing || raDate < existing) customerToReserviceDate.set(cid, raDate);
+      }
+    }
+    const customerIds = [...customerToReserviceDate.keys()];
+    if (customerIds.length > 0) {
+      const GENERAL_TYPE_IDS = [9, 6, 15, 242, 1, 2, 151, 11, 7, 14, 236, 26, 237];
+      const lookbackStart = new Date(year, mon - 7, 1);
+      const priorRegular = await prisma.appointment.findMany({
+        where: {
+          date: { gte: lookbackStart, lt: monthEnd },
+          status: 1, isReservice: false,
+          customerId: { in: customerIds },
+        },
+        select: { customerId: true, assignedEmployeeId: true, servicedByEmployeeId: true, date: true, checkIn: true, rawJson: true },
+        orderBy: { date: "desc" },
+      });
+      for (const a of priorRegular) {
+        if (!a.customerId || customerToTech.has(a.customerId)) continue;
+        const raw = a.rawJson as Record<string, unknown>;
+        const typeId = raw.type ? parseInt(raw.type as string) : 0;
+        if (!GENERAL_TYPE_IDS.includes(typeId)) continue;
+        const rsDate = customerToReserviceDate.get(a.customerId);
+        const svcDate = a.checkIn ?? a.date;
+        if (rsDate && svcDate >= rsDate) continue;
+        if (rsDate) {
+          const dayGap = (rsDate.getTime() - svcDate.getTime()) / 86400000;
+          if (dayGap > 45) continue;
+        }
+        customerToTech.set(a.customerId, a.servicedByEmployeeId ?? a.assignedEmployeeId);
+      }
+    }
+  }
+
+  const BRANCH_ABBR: Record<string, string> = { Boise: "BOI", "Bigfoot Pest Control": "BOI", Portland: "PDX" };
+
+  const rows = techs.map((tech: { id: string; name: string; firstName: string; fieldroutesEmployeeId: number; photoUrl: string | null; branch: { name: string } }) => {
     const frId = tech.fieldroutesEmployeeId;
-    const serviced = appts.filter(
+    const serviced = monthAppts.filter(
       (a) => (a.servicedByEmployeeId ?? a.assignedEmployeeId) === frId
     );
 
@@ -79,193 +125,122 @@ async function getLeaderboard(year: number, mon: number) {
     }
     const prodHr = totalHrs > 0 ? totalProd / totalHrs : null;
 
-    const reserviceCount = serviced.filter((a) => {
+    const reserviceCount = reserviceAppts.filter(a => {
       const raw = a.rawJson as Record<string, unknown>;
-      return raw.originalAppointmentID && raw.originalAppointmentID !== "0";
+      const cid = raw.customerID ? parseInt(raw.customerID as string) : null;
+      if (!cid) return false;
+      return customerToTech.get(cid) === frId;
     }).length;
-    const reservicePct = serviced.length > 0 ? (reserviceCount / serviced.length) * 100 : null;
+    const denominator = serviced.filter(a => !a.isReservice).length;
+    const reservicePct = denominator > 0 ? (reserviceCount / denominator) * 100 : null;
+
+    const att = attendanceRows.find(a => a.techId === tech.id);
+    const attendancePct = att && att.workingDays > 0
+      ? ((att.workingDays - att.callouts) / att.workingDays) * 100
+      : null;
+
+    const techTrips = monthTrips.filter(t => t.attributedTechId === tech.id);
+    const totalMiles = techTrips.reduce((s, t) => s + Number(t.distanceMiles), 0);
+    const totalHardBrakes = techTrips.reduce((s, t) => s + t.hardBrakes, 0);
+    const totalHardAccels = techTrips.reduce((s, t) => s + t.hardAccels, 0);
+    const drivingScore = techTrips.length > 0
+      ? computeDrivingScore(totalHardBrakes, totalHardAccels, totalMiles)
+      : null;
+
+    const starsCount = fiveStarReviews.find(s => s.attributedTechId === tech.id)?.count ?? null;
 
     const inputs: KpiInput[] = [
-      { key: "driving",   actual: null,         goal: GOALS.driving },
-      { key: "reservice", actual: reservicePct, goal: GOALS.reservice, curve: "goal_over_actual" },
-      { key: "prod_hr",   actual: prodHr,       goal: GOALS.prod_hr },
-      { key: "complete",  actual: null,         goal: GOALS.complete },
-      { key: "stars",     actual: null,         goal: GOALS.stars, daysElapsed: de, daysInMonth: dm },
+      { key: "driving",    actual: drivingScore,   goal: goals.driving },
+      { key: "reservice",  actual: reservicePct,   goal: goals.reservice, curve: "goal_over_actual" },
+      { key: "prod_hr",    actual: prodHr,          goal: goals.prod_hr },
+      { key: "attendance", actual: attendancePct,   goal: goals.attendance },
+      { key: "stars",      actual: starsCount,      goal: goals.stars, daysElapsed: de, daysInMonth: dm },
     ];
 
-    const { proscore, proscoreRaw } = computeProScore(inputs);
-    return { techId: tech.id, name: tech.name, firstName: tech.firstName,
-             apptCount: serviced.length, reservicePct, prodHr, proscore, proscoreRaw };
+    const { proscore, proscoreRaw, kpiResults } = computeProScore(inputs);
+
+    const kpis = toFpKpis(kpiResults, undefined, {
+      reservice: {
+        detail: reservicePct !== null
+          ? `${reserviceCount} reservice${reserviceCount !== 1 ? "s" : ""} charged to you on ${denominator} completed services.`
+          : undefined,
+      },
+    });
+
+    return { tech, proscore, proscoreRaw, kpis };
   });
 
-  rows.sort((a, b) => b.proscoreRaw - a.proscoreRaw);
-  const ranks = denseRank(rows.map((r) => r.proscore));
-  return rows.map((r, i) => ({ ...r, rank: ranks[i] }));
+  rows.sort((a: { proscoreRaw: number }, b: { proscoreRaw: number }) => b.proscoreRaw - a.proscoreRaw);
+  const ranks = denseRank(rows.map((r: { proscore: number }) => r.proscore));
+
+  return rows.map((r: typeof rows[0], i: number): FpTech => ({
+    id: r.tech.id,
+    name: r.tech.name,
+    photoUrl: r.tech.photoUrl,
+    branch: BRANCH_ABBR[r.tech.branch.name] ?? r.tech.branch.name,
+    rank: ranks[i],
+    proscore: r.proscore,
+    kpis: r.kpis,
+  }));
 }
 
-export default async function DashboardPage() {
-  const { year, mon } = currentMonth();
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ month?: string }>;
+}) {
+  const sp = await searchParams;
+  const now = new Date();
+  let year = now.getFullYear();
+  let mon  = now.getMonth() + 1;
+
+  if (sp.month && /^\d{4}-\d{2}$/.test(sp.month)) {
+    const [y, m] = sp.month.split("-").map(Number);
+    if (y >= 2024 && m >= 1 && m <= 12) { year = y; mon = m; }
+  }
+
   const de = daysElapsed(year, mon);
   const dm = daysInMonth(year, mon);
-  const label = `${MONTH_NAMES[mon - 1]} ${year}`;
+  const monthName = MONTH_NAMES[mon - 1];
+  const isCurrentMonth = year === now.getFullYear() && mon === now.getMonth() + 1;
+  const periodLabel = `${monthName} ${year} · Day ${de} of ${dm}`;
 
-  let rows: Awaited<ReturnType<typeof getLeaderboard>> = [];
+  const prevMon = mon === 1 ? 12 : mon - 1;
+  const prevYear = mon === 1 ? year - 1 : year;
+  const prevHref = `/?month=${prevYear}-${String(prevMon).padStart(2, "0")}`;
+  const nextHref = isCurrentMonth ? null : `/?month=${year === now.getFullYear() && mon === now.getMonth() ? year : (mon === 12 ? year + 1 : year)}-${String(mon === 12 ? 1 : mon + 1).padStart(2, "0")}`;
+
+  let techs: FpTech[] = [];
   let dbError = false;
-  try { rows = await getLeaderboard(year, mon); } catch { dbError = true; }
+  const goals = await getGoals();
+  const [leaderboardResult, admin] = await Promise.allSettled([
+    getLeaderboard(year, mon, goals),
+    isAdmin(),
+  ]);
+  if (leaderboardResult.status === "fulfilled") {
+    techs = leaderboardResult.value;
+  } else {
+    dbError = true;
+  }
+  const manager = admin.status === "fulfilled" && admin.value;
 
   return (
-    <div className="min-h-screen" style={{ background: "#0a1a14" }}>
-
-      {/* Header */}
-      <div className="sticky top-0 z-10 border-b border-white/10"
-           style={{ background: GREEN }}>
-        <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div>
-            <h1 className="text-lg font-black tracking-tight text-white">
-              🦶 ProScore
-            </h1>
-            <p className="text-xs text-white/60">{label} · Day {de} of {dm}</p>
-          </div>
-          <div className="flex items-center gap-1.5 text-xs text-white/50">
-            <span className="w-2 h-2 rounded-full animate-pulse"
-                  style={{ background: ORANGE }} />
-            Live
-          </div>
-        </div>
-      </div>
-
-      <div className="max-w-3xl mx-auto px-3 py-5">
-        {dbError && (
-          <div className="p-4 rounded-xl text-sm mb-4 border"
-               style={{ background: "#1a0a0a", borderColor: "#7f1d1d", color: "#fca5a5" }}>
-            Could not load scores — database may be initializing.
-          </div>
-        )}
-
-        {!dbError && rows.length === 0 && (
-          <div className="text-center py-20" style={{ color: "#4a7a65" }}>
-            <p className="text-lg">No techs found.</p>
-            <p className="text-sm mt-1">
-              Run{" "}
-              <a href="/setup/employees" className="underline" style={{ color: ORANGE }}>
-                /setup/employees
-              </a>{" "}
-              first.
-            </p>
-          </div>
-        )}
-
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          {rows.map((row, idx) => {
-            const resGood  = row.reservicePct !== null && row.reservicePct <= GOALS.reservice;
-            const prodGood = row.prodHr !== null && row.prodHr >= GOALS.prod_hr;
-            const gradient = cardGradient(row.rank, idx);
-
-            return (
-              <div
-                key={row.techId}
-                className="rounded-2xl overflow-hidden flex flex-col"
-                style={{
-                  background: gradient,
-                  boxShadow: row.rank === 1
-                    ? `0 0 0 2px ${ORANGE}, 0 8px 24px rgba(229,73,0,0.3)`
-                    : "0 4px 16px rgba(0,0,0,0.4)",
-                }}
-              >
-                {/* Top section */}
-                <div className="flex flex-col items-center pt-5 pb-3 px-3 relative">
-                  {/* Rank */}
-                  <span className="absolute top-2.5 left-3 text-xs font-black"
-                        style={{ color: "rgba(255,255,255,0.5)" }}>
-                    #{row.rank}
-                  </span>
-
-                  {/* Avatar */}
-                  <div
-                    className="w-14 h-14 rounded-full flex items-center justify-center text-xl font-black text-white border-2"
-                    style={{
-                      background: "rgba(0,0,0,0.3)",
-                      borderColor: row.rank === 1 ? ORANGE : "rgba(255,255,255,0.2)",
-                    }}
-                  >
-                    {initials(row.name)}
-                  </div>
-
-                  {/* ProScore */}
-                  <div
-                    className="mt-2 text-4xl font-black leading-none"
-                    style={{ color: scoreTextColor(row.proscore) }}
-                  >
-                    {row.proscore}
-                  </div>
-                  <div className="text-[10px] uppercase tracking-widest mt-0.5"
-                       style={{ color: "rgba(255,255,255,0.4)" }}>
-                    ProScore
-                  </div>
-                </div>
-
-                {/* Bottom section */}
-                <div
-                  className="flex-1 px-3 py-2.5 flex flex-col gap-2"
-                  style={{ background: "rgba(0,0,0,0.35)" }}
-                >
-                  {/* Name */}
-                  <div className="text-center">
-                    <p className="text-sm font-bold text-white leading-tight">{row.firstName}</p>
-                    <p className="text-[11px] leading-tight" style={{ color: "rgba(255,255,255,0.45)" }}>
-                      {row.name.split(" ").slice(1).join(" ")}
-                    </p>
-                  </div>
-
-                  {/* Stats */}
-                  <div className="border-t pt-2 grid grid-cols-2 gap-x-2 gap-y-2"
-                       style={{ borderColor: "rgba(255,255,255,0.1)" }}>
-                    {[
-                      {
-                        label: "Reservice",
-                        value: row.reservicePct !== null ? `${row.reservicePct.toFixed(1)}%` : null,
-                        good: row.reservicePct !== null ? resGood : null,
-                      },
-                      {
-                        label: "Prod/hr",
-                        value: row.prodHr !== null ? `$${Math.round(row.prodHr)}` : null,
-                        good: row.prodHr !== null ? prodGood : null,
-                      },
-                      { label: "Drive",  value: null, good: null },
-                      { label: "Stars",  value: null, good: null },
-                    ].map((stat) => (
-                      <div key={stat.label} className="text-center">
-                        <p
-                          className="text-sm font-bold"
-                          style={{
-                            color: stat.value === null
-                              ? "rgba(255,255,255,0.18)"
-                              : stat.good
-                              ? "#4ade80"
-                              : "#f87171",
-                          }}
-                        >
-                          {stat.value ?? "—"}
-                        </p>
-                        <p className="text-[9px] uppercase tracking-wide"
-                           style={{ color: "rgba(255,255,255,0.3)" }}>
-                          {stat.label}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Appt count footer */}
-                  <p className="text-center text-[10px] border-t pt-1.5"
-                     style={{ color: "rgba(255,255,255,0.2)", borderColor: "rgba(255,255,255,0.07)" }}>
-                    {row.apptCount} appts
-                  </p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
+    <FootprintShell
+      activeTab="leaderboard"
+      periodLabel={periodLabel}
+      updatedLabel={isCurrentMonth ? "Live" : undefined}
+      isManager={manager}
+    >
+      <MonthPicker
+        label={`${monthName} ${year}`}
+        prevHref={prevHref}
+        nextHref={nextHref}
+      />
+      {dbError ? (
+        <div className="fp-empty">Could not load scores — database may be initializing.</div>
+      ) : (
+        <Leaderboard techs={techs} branches={["BOI", "PDX"]} />
+      )}
+    </FootprintShell>
   );
 }

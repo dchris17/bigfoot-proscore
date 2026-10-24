@@ -1,0 +1,1 @@
+ALTER TABLE "Tech" ADD COLUMN "photoUrl" TEXT;

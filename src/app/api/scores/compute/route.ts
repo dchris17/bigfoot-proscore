@@ -93,7 +93,7 @@ export async function POST(req: NextRequest) {
       { key: "driving",   actual: null,         goal: GOALS.driving },
       { key: "reservice", actual: reservicePct, goal: GOALS.reservice, curve: "goal_over_actual" },
       { key: "prod_hr",   actual: prodHr,       goal: GOALS.prod_hr },
-      { key: "complete",  actual: null,         goal: GOALS.complete }, // needs all statuses
+      { key: "attendance", actual: null,          goal: GOALS.attendance },
       { key: "stars",     actual: null,         goal: GOALS.stars, daysElapsed: de, daysInMonth: dm },
     ];
 

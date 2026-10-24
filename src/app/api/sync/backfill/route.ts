@@ -31,6 +31,8 @@ interface FRAppointment {
   officeID: string;
   customerID: string;
   subscriptionID: string;
+  serviceTypeID: string;
+  ticketID: string;
   date: string;
   status: string;
   type: string;
@@ -71,23 +73,29 @@ export async function POST(req: NextRequest) {
   for (const month of months) {
     const { dateStart, dateEnd } = monthRange(month);
 
-    // Search for completed appointment IDs
-    const searchRes = await frGet("appointment", "search", {
-      status: "1",
-      dateStart,
-      dateEnd,
-    }) as { success: boolean; appointmentIDs?: number[]; errorMessage?: string };
+    // Search for completed (1) and cancelled/no-show (2) appointments
+    const allIds: number[] = [];
+    for (const status of ["1", "2"]) {
+      const searchRes = await frGet("appointment", "search", {
+        status,
+        dateStart,
+        dateEnd,
+      }) as { success: boolean; appointmentIDs?: number[]; errorMessage?: string };
 
-    if (!searchRes.success) {
-      errors.push(`${month}: search failed — ${searchRes.errorMessage ?? "unknown"}`);
-      continue;
+      if (!searchRes.success) {
+        errors.push(`${month} status=${status}: search failed — ${searchRes.errorMessage ?? "unknown"}`);
+        continue;
+      }
+      allIds.push(...(searchRes.appointmentIDs ?? []));
     }
 
-    const ids = searchRes.appointmentIDs ?? [];
+    const ids = [...new Set(allIds)];
     let monthCount = 0;
+    const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-    // Fetch in batches of 100
+    // Fetch in batches of 100 with rate-limit pacing (4s between batches keeps ~30 calls/min)
     for (const batch of chunks(ids, 100)) {
+      await delay(4000);
       const getRes = await frGet("appointment", "get", {
         appointmentIDs: batch.join(","),
       }) as { success: boolean; propertyName?: string; errorMessage?: string };
@@ -103,16 +111,44 @@ export async function POST(req: NextRequest) {
 
       const appts = Object.values(apptMap as Record<string, unknown>) as FRAppointment[];
 
+      // Fetch ticket data for completed appointments to get actual serviceCharge
+      const ticketIds = appts
+        .filter(a => a.status === "1" && a.ticketID && a.ticketID !== "0")
+        .map(a => a.ticketID as string);
+      const ticketChargeMap = new Map<string, number>();
+      if (ticketIds.length > 0) {
+        for (const tBatch of chunks(ticketIds, 100)) {
+          const tRes = await frGet("ticket", "get", { ticketIDs: tBatch.join(",") }) as {
+            success: boolean;
+            propertyName?: string;
+            [key: string]: unknown;
+          };
+          if (tRes.success) {
+            const tProp = tRes.propertyName ?? "tickets";
+            const ticketArr = tRes[tProp] as Array<{ ticketID: string; serviceCharge: string }> | undefined;
+            if (ticketArr) {
+              for (const t of ticketArr) {
+                const charge = parseFloat(t.serviceCharge);
+                if (charge >= 0) ticketChargeMap.set(t.ticketID, charge);
+              }
+            }
+          }
+        }
+      }
+
       for (const a of appts) {
         try {
           const apptDate = new Date(a.date);
-          const prodVal = parseFloat(a.productionValue);
-          const production = prodVal >= 0 ? prodVal : null;
+          // Use ticket serviceCharge as production value; FR's own productionValue is always -1.00
+          const ticketCharge = a.ticketID ? ticketChargeMap.get(a.ticketID as string) : undefined;
+          const production = ticketCharge !== undefined ? ticketCharge : null;
 
           const parseTs = (s: string | null) =>
             s && !s.startsWith("0000") ? new Date(s.replace(" ", "T") + "-06:00") : null;
           const checkIn = parseTs(a.checkIn);
           const checkOut = parseTs(a.checkOut);
+
+          const isReservice = a.type === "3"; // service type 3 = Reservice (RS)
 
           await prisma.appointment.upsert({
             where: { id: parseInt(a.appointmentID) },
@@ -122,6 +158,7 @@ export async function POST(req: NextRequest) {
               status: parseInt(a.status),
               assignedEmployeeId: parseInt(a.employeeID),
               servicedByEmployeeId: a.servicedBy ? parseInt(a.servicedBy) : null,
+              isReservice,
               productionValue: production,
               checkIn,
               checkOut,
@@ -138,6 +175,7 @@ export async function POST(req: NextRequest) {
               assignedEmployeeId: parseInt(a.employeeID),
               servicedByEmployeeId: a.servicedBy ? parseInt(a.servicedBy) : null,
               serviceTypeId: null,
+              isReservice,
               productionValue: production,
               checkIn,
               checkOut,

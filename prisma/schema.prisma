@@ -29,6 +29,7 @@ model Tech {
   branchId              String
   active                Boolean  @default(true)
   included              Boolean  @default(true) // included in scoring
+  photoUrl              String?  // relative path, e.g. "/photos/Larry Alexander.jpg"
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
@@ -40,6 +41,7 @@ model Tech {
   autoReviews      Review[]           @relation("AutoTech")
   manualReviews    Review[]           @relation("ManualTech")
   attributedTrips  Trip[]
+  attendance       Attendance[]
 }
 
 model Truck {
@@ -224,6 +226,23 @@ model DrivenSnapshot {
   fileName    String
 
   @@index([month])
+}
+
+model Attendance {
+  id          String   @id @default(cuid())
+  techId      String
+  year        Int
+  month       Int      // 1-12
+  callouts    Int      @default(0)
+  workingDays Int      // total scheduled working days this month
+  notes       String?
+  updatedAt   DateTime @updatedAt
+  updatedBy   String?  // manager email
+
+  tech Tech @relation(fields: [techId], references: [id])
+
+  @@unique([techId, year, month])
+  @@index([year, month])
 }
 
 model Setting {

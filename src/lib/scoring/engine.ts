@@ -7,7 +7,7 @@ export const GOALS = {
   driving: 90,
   reservice: 10.0,
   prod_hr: 200,
-  complete: 90,
+  attendance: 100,
   stars: 7,
 } as const;
 
