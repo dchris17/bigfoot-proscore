@@ -307,7 +307,7 @@
 /* ---------- PIN ---------- */
 .fp-pin { min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; background-color: var(--fp-chrome); background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.04) 0 2px, transparent 2px 16px); }
 .fp-pin-card { width: 100%; max-width: 360px; background: var(--fp-surface); border-radius: 24px; padding: 28px 22px 22px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3); text-align: center; }
-.fp-pin-logo { width: 56px; height: 56px; margin: 0 auto 10px; color: var(--fp-pine); }
+.fp-pin-logo { width: 72px; height: 72px; margin: 0 auto 12px; }
 .fp-pin-title { font-family: var(--fp-display); font-size: 28px; line-height: 1; }
 .fp-pin-sub { color: var(--fp-muted); font-size: 14px; margin: 8px 0 20px; }
 .fp-pin-dots { display: flex; justify-content: center; gap: 14px; margin-bottom: 8px; }

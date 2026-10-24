@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useState } from "react";
 import "./footprint.css";
 import { fpFontVars } from "./fonts";
-import { FootprintMark } from "./Icons";
+import { FootprintBadge } from "./Icons";
 
 export interface PinScreenProps {
   /** Check the PIN on the server. Return ok, or an error message to show. */
@@ -64,7 +64,7 @@ export function PinScreen({ onSubmit, length = 4, fontClassName = fpFontVars, th
     <div className={`fp ${fontClassName}`} data-theme={theme}>
       <div className="fp-pin">
         <div className="fp-pin-card">
-          <FootprintMark className="fp-pin-logo" />
+          <FootprintBadge className="fp-pin-logo" />
           <div className="fp-pin-title">The Footprint</div>
           <p className="fp-pin-sub">Enter the team PIN to see the scorecard.</p>
           <div className={`fp-pin-dots${error ? " is-error" : ""}`} aria-label={`${pin.length} of ${length} digits entered`}>
