@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { computeProScore, GOALS, type KpiInput, denseRank } from "@/lib/scoring/engine";
 import { getGoals } from "@/lib/goals";
-import { computeDrivingScore } from "@/lib/bouncie/client";
+import { computeDrivingScore, drivingDetail, drivingTripWindow, DRIVING_TRIP_SELECT, type DrivingTrip } from "@/lib/scoring/driving";
 import { computeReservices, reservicePctFor } from "@/lib/scoring/reservice";
 import { computeProdHr, formatWorkTime, prodHrFor, PROD_HR_SELECT } from "@/lib/scoring/prodHr";
 import {
@@ -66,9 +66,9 @@ async function getTechData(techId: string, year: number, mon: number, goals: typ
       select: { callouts: true, workingDays: true },
     }) as Promise<{ callouts: number; workingDays: number } | null>,
     db.trip.findMany({
-      where: { attributedTechId: techId, startedAt: { gte: monthStart, lt: monthEnd } },
-      select: { distanceMiles: true, hardBrakes: true, hardAccels: true },
-    }) as Promise<{ distanceMiles: number; hardBrakes: number; hardAccels: number }[]>,
+      where: { attributedTechId: techId, startedAt: drivingTripWindow(monthStart, monthEnd) },
+      select: DRIVING_TRIP_SELECT,
+    }) as Promise<DrivingTrip[]>,
     db.monthlyScore.findMany({
       where: { techId },
       orderBy: [{ month: "desc" }],
@@ -117,12 +117,8 @@ async function getTechData(techId: string, year: number, mon: number, goals: typ
     ? ((att.workingDays - att.callouts) / att.workingDays) * 100
     : null;
 
-  const totalMiles = techTrips.reduce((s, t) => s + Number(t.distanceMiles), 0);
-  const totalHardBrakes = techTrips.reduce((s, t) => s + t.hardBrakes, 0);
-  const totalHardAccels = techTrips.reduce((s, t) => s + t.hardAccels, 0);
-  const drivingScore = techTrips.length > 0
-    ? computeDrivingScore(totalHardBrakes, totalHardAccels, totalMiles)
-    : null;
+  const driving = computeDrivingScore(techTrips, `${year}-${String(mon).padStart(2, "0")}`);
+  const drivingScore = driving.score;
 
   const starsCount: number | null = starsRows[0]?.count > 0 ? starsRows[0].count : null;
 
@@ -144,6 +140,7 @@ async function getTechData(techId: string, year: number, mon: number, goals: typ
     .map(c => [shortDate(c.reserviceDate), String(c.customerId), shortDate(c.originalDate), c.category, techName(c.reservicedById)]);
 
   const kpis = toFpKpis(kpiResults, undefined, {
+    driving: { detail: drivingDetail(driving) },
     reservice: {
       detail: reservicePct !== null
         ? `${reserviceCount} reservice${reserviceCount !== 1 ? "s" : ""} charged to you on ${scheduled} scheduled appointments this month.`

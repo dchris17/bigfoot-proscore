@@ -3,9 +3,9 @@ export const dynamic = "force-dynamic";
 import { prisma } from "@/lib/prisma";
 import { computeProScore, GOALS, type KpiInput, denseRank } from "@/lib/scoring/engine";
 import { getGoals } from "@/lib/goals";
-import { computeDrivingScore } from "@/lib/bouncie/client";
 import { computeReservices, reservicePctFor } from "@/lib/scoring/reservice";
 import { computeProdHr, prodHrFor, PROD_HR_SELECT } from "@/lib/scoring/prodHr";
+import { computeDrivingScore, drivingDetail, drivingTripWindow, DRIVING_TRIP_SELECT, type DrivingTrip } from "@/lib/scoring/driving";
 import {
   FootprintShell,
   Leaderboard,
@@ -32,6 +32,7 @@ async function getLeaderboard(year: number, mon: number, goals: typeof GOALS) {
   const monthEnd   = new Date(year, mon, 1);
   const dm = daysInMonth(year, mon);
   const de = daysElapsed(year, mon);
+  const monthKey = `${year}-${String(mon).padStart(2, "0")}`;
 
   const [monthAppts, reservices, attendanceRows, techs, monthTrips, fiveStarReviews] = await Promise.all([
     prisma.appointment.findMany({
@@ -48,9 +49,9 @@ async function getLeaderboard(year: number, mon: number, goals: typeof GOALS) {
       select: { id: true, name: true, firstName: true, fieldroutesEmployeeId: true, photoUrl: true, branch: { select: { name: true } } },
     }) as Promise<{ id: string; name: string; firstName: string; fieldroutesEmployeeId: number; photoUrl: string | null; branch: { name: string } }[]>,
     db.trip.findMany({
-      where: { startedAt: { gte: monthStart, lt: monthEnd } },
-      select: { attributedTechId: true, distanceMiles: true, hardBrakes: true, hardAccels: true },
-    }) as Promise<{ attributedTechId: string | null; distanceMiles: number; hardBrakes: number; hardAccels: number }[]>,
+      where: { startedAt: drivingTripWindow(monthStart, monthEnd) },
+      select: { attributedTechId: true, ...DRIVING_TRIP_SELECT },
+    }) as Promise<(DrivingTrip & { attributedTechId: string | null })[]>,
     db.$queryRawUnsafe(
       `SELECT "attributedTechId", COUNT(*)::int as count FROM "Review"
        WHERE "reviewDate" >= $1 AND "reviewDate" < $2 AND rating = 5 AND "attributedTechId" IS NOT NULL
@@ -74,13 +75,8 @@ async function getLeaderboard(year: number, mon: number, goals: typeof GOALS) {
       ? ((att.workingDays - att.callouts) / att.workingDays) * 100
       : null;
 
-    const techTrips = monthTrips.filter(t => t.attributedTechId === tech.id);
-    const totalMiles = techTrips.reduce((s, t) => s + Number(t.distanceMiles), 0);
-    const totalHardBrakes = techTrips.reduce((s, t) => s + t.hardBrakes, 0);
-    const totalHardAccels = techTrips.reduce((s, t) => s + t.hardAccels, 0);
-    const drivingScore = techTrips.length > 0
-      ? computeDrivingScore(totalHardBrakes, totalHardAccels, totalMiles)
-      : null;
+    const driving = computeDrivingScore(monthTrips.filter(t => t.attributedTechId === tech.id), monthKey);
+    const drivingScore = driving.score;
 
     const starsCount = fiveStarReviews.find(s => s.attributedTechId === tech.id)?.count ?? null;
 
@@ -95,6 +91,7 @@ async function getLeaderboard(year: number, mon: number, goals: typeof GOALS) {
     const { proscore, proscoreRaw, kpiResults } = computeProScore(inputs);
 
     const kpis = toFpKpis(kpiResults, undefined, {
+      driving: { detail: drivingDetail(driving) },
       reservice: {
         detail: reservicePct !== null
           ? `${reserviceCount} reservice${reserviceCount !== 1 ? "s" : ""} charged to you on ${scheduled} scheduled appointments.`

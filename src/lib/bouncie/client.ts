@@ -174,20 +174,3 @@ export async function getTrips(imei: string, startsAfter: Date, endsBefore: Date
 
   return all;
 }
-
-// ── Driving score ─────────────────────────────────────────────────────────────
-
-/**
- * Compute driving score from aggregated monthly trip metrics.
- * Base 100, deduct for hard events normalized per 100 miles.
- * Calibrated to Driven's observed scores (Aldo ≈ 93).
- */
-export function computeDrivingScore(
-  hardBrakes: number,
-  hardAccels: number,
-  totalMiles: number
-): number {
-  if (totalMiles < 1) return null as unknown as number;
-  const eventsPerHundredMiles = ((hardBrakes * 1.5 + hardAccels * 0.5) / totalMiles) * 100;
-  return Math.max(0, Math.min(100, Math.round(100 - eventsPerHundredMiles)));
-}
