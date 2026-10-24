@@ -7,21 +7,10 @@ export async function getGoals(): Promise<GoalsMap> {
     const { prisma } = await import("@/lib/prisma");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = prisma as any;
-    await db.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS "Setting" (
-        "key" TEXT PRIMARY KEY,
-        "value" TEXT NOT NULL
-      )
-    `);
-    const rows = await db.$queryRawUnsafe(
-      `SELECT value FROM "Setting" WHERE key = 'goals'`
-    ) as { value: string }[];
-    if (rows.length > 0) {
-      const parsed = JSON.parse(rows[0].value);
-      return { ...GOALS, ...parsed };
-    }
+    const row = await db.setting.findUnique({ where: { key: "goals" } }) as { value: string } | null;
+    if (row) return { ...GOALS, ...JSON.parse(row.value) };
   } catch {
-    // DB error — fall back to defaults
+    // DB unavailable — fall back to defaults
   }
   return { ...GOALS };
 }

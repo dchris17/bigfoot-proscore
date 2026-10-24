@@ -39,7 +39,10 @@ export function GoalsEditor({ initialGoals }: { initialGoals: Record<string, num
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(goals),
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error ?? `Save failed (${res.status})`);
+      }
       setSaved(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Save failed");

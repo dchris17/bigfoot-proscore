@@ -1,41 +1,36 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getGoals } from "@/lib/goals";
 import { GOALS } from "@/lib/scoring/engine";
+import { isAdmin } from "@/app/pin/actions";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = prisma as any;
 
-async function ensureSettingTable() {
-  await db.$executeRawUnsafe(`
-    CREATE TABLE IF NOT EXISTS "Setting" (
-      "key" TEXT PRIMARY KEY,
-      "value" TEXT NOT NULL
-    )
-  `);
-}
-
 export async function GET() {
-  try {
-    await ensureSettingTable();
-    const rows = await db.$queryRawUnsafe(
-      `SELECT key, value FROM "Setting" WHERE key = 'goals'`
-    ) as { key: string; value: string }[];
-    if (rows.length > 0) {
-      return NextResponse.json({ goals: JSON.parse(rows[0].value) });
-    }
-    return NextResponse.json({ goals: { ...GOALS } });
-  } catch (e) {
-    return NextResponse.json({ goals: { ...GOALS } });
-  }
+  return NextResponse.json({ goals: await getGoals() });
 }
 
 export async function POST(req: NextRequest) {
-  const body = await req.json() as Record<string, number>;
-  await ensureSettingTable();
-  await db.$executeRawUnsafe(
-    `INSERT INTO "Setting" (key, value) VALUES ('goals', $1)
-     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-    JSON.stringify(body)
-  );
-  return NextResponse.json({ ok: true });
+  if (!(await isAdmin())) {
+    return NextResponse.json({ error: "Manager PIN required" }, { status: 401 });
+  }
+
+  const body = await req.json() as Record<string, unknown>;
+  const goals: Record<string, number> = {};
+  for (const key of Object.keys(GOALS)) {
+    const v = Number(body[key]);
+    if (!Number.isFinite(v) || v < 0) {
+      return NextResponse.json({ error: `Invalid value for ${key}` }, { status: 400 });
+    }
+    goals[key] = v;
+  }
+
+  const value = JSON.stringify(goals);
+  await db.setting.upsert({
+    where: { key: "goals" },
+    create: { key: "goals", value },
+    update: { value },
+  });
+  return NextResponse.json({ ok: true, goals });
 }
