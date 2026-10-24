@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { computeProScore, GOALS, KpiInput } from "@/lib/scoring/engine";
+import { computeReservices, reservicePctFor } from "@/lib/scoring/reservice";
 import { isAdmin } from "@/app/pin/actions";
 
 function daysInMonth(year: number, month: number) {
@@ -50,6 +51,7 @@ export async function POST(req: NextRequest) {
 
   const dm = daysInMonth(year, mon);
   const de = daysElapsed(year, mon);
+  const reservices = await computeReservices(monthStart, monthEnd);
 
   const techScores = techs.map((tech) => {
     const frId = tech.fieldroutesEmployeeId;
@@ -83,14 +85,7 @@ export async function POST(req: NextRequest) {
     const prodHr = totalHours > 0 ? totalProdValue / totalHours : null;
 
     // --- Reservice % ---
-    // rawJson.originalAppointmentID != "0" means it's a reservice
-    const reserviceCount = serviced.filter((a) => {
-      const raw = a.rawJson as Record<string, unknown>;
-      return raw.originalAppointmentID && raw.originalAppointmentID !== "0";
-    }).length;
-    const reservicePct = serviced.length > 0
-      ? (reserviceCount / serviced.length) * 100
-      : null;
+    const { pct: reservicePct, count: reserviceCount } = reservicePctFor(reservices, frId);
 
     // Build KPI inputs
     const kpiInputs: KpiInput[] = [

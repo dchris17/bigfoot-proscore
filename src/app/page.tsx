@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { computeProScore, GOALS, type KpiInput, denseRank } from "@/lib/scoring/engine";
 import { getGoals } from "@/lib/goals";
 import { computeDrivingScore } from "@/lib/bouncie/client";
+import { computeReservices, reservicePctFor } from "@/lib/scoring/reservice";
 import {
   FootprintShell,
   Leaderboard,
@@ -31,15 +32,15 @@ async function getLeaderboard(year: number, mon: number, goals: typeof GOALS) {
   const dm = daysInMonth(year, mon);
   const de = daysElapsed(year, mon);
 
-  const [monthAppts, attendanceRows, techs, monthTrips, fiveStarReviews] = await Promise.all([
+  const [monthAppts, reservices, attendanceRows, techs, monthTrips, fiveStarReviews] = await Promise.all([
     prisma.appointment.findMany({
       where: { date: { gte: monthStart, lt: monthEnd }, status: 1 },
       select: {
-        id: true, assignedEmployeeId: true, servicedByEmployeeId: true,
-        productionValue: true, checkIn: true, checkOut: true, date: true,
-        isReservice: true, rawJson: true, customerId: true,
+        assignedEmployeeId: true, servicedByEmployeeId: true,
+        productionValue: true, checkIn: true, checkOut: true,
       },
     }),
+    computeReservices(monthStart, monthEnd),
     db.attendance.findMany({
       where: { year, month: mon },
       select: { techId: true, callouts: true, workingDays: true },
@@ -59,51 +60,6 @@ async function getLeaderboard(year: number, mon: number, goals: typeof GOALS) {
       monthStart.toISOString(), monthEnd.toISOString()
     ).catch(() => []) as Promise<{ attributedTechId: string; count: number }[]>,
   ]);
-
-  // Driven-style reservice attribution
-  const reserviceAppts = monthAppts.filter(a => a.isReservice);
-  const customerToTech = new Map<number, number>();
-
-  if (reserviceAppts.length > 0) {
-    const customerToReserviceDate = new Map<number, Date>();
-    for (const ra of reserviceAppts) {
-      const raw = ra.rawJson as Record<string, unknown>;
-      const cid = raw.customerID ? parseInt(raw.customerID as string) : null;
-      if (cid) {
-        const raDate = ra.checkIn ?? ra.date;
-        const existing = customerToReserviceDate.get(cid);
-        if (!existing || raDate < existing) customerToReserviceDate.set(cid, raDate);
-      }
-    }
-    const customerIds = [...customerToReserviceDate.keys()];
-    if (customerIds.length > 0) {
-      const GENERAL_TYPE_IDS = [9, 6, 15, 242, 1, 2, 151, 11, 7, 14, 236, 26, 237];
-      const lookbackStart = new Date(year, mon - 7, 1);
-      const priorRegular = await prisma.appointment.findMany({
-        where: {
-          date: { gte: lookbackStart, lt: monthEnd },
-          status: 1, isReservice: false,
-          customerId: { in: customerIds },
-        },
-        select: { customerId: true, assignedEmployeeId: true, servicedByEmployeeId: true, date: true, checkIn: true, rawJson: true },
-        orderBy: { date: "desc" },
-      });
-      for (const a of priorRegular) {
-        if (!a.customerId || customerToTech.has(a.customerId)) continue;
-        const raw = a.rawJson as Record<string, unknown>;
-        const typeId = raw.type ? parseInt(raw.type as string) : 0;
-        if (!GENERAL_TYPE_IDS.includes(typeId)) continue;
-        const rsDate = customerToReserviceDate.get(a.customerId);
-        const svcDate = a.checkIn ?? a.date;
-        if (rsDate && svcDate >= rsDate) continue;
-        if (rsDate) {
-          const dayGap = (rsDate.getTime() - svcDate.getTime()) / 86400000;
-          if (dayGap > 45) continue;
-        }
-        customerToTech.set(a.customerId, a.servicedByEmployeeId ?? a.assignedEmployeeId);
-      }
-    }
-  }
 
   const BRANCH_ABBR: Record<string, string> = { Boise: "BOI", "Bigfoot Pest Control": "BOI", Portland: "PDX" };
 
@@ -125,14 +81,7 @@ async function getLeaderboard(year: number, mon: number, goals: typeof GOALS) {
     }
     const prodHr = totalHrs > 0 ? totalProd / totalHrs : null;
 
-    const reserviceCount = reserviceAppts.filter(a => {
-      const raw = a.rawJson as Record<string, unknown>;
-      const cid = raw.customerID ? parseInt(raw.customerID as string) : null;
-      if (!cid) return false;
-      return customerToTech.get(cid) === frId;
-    }).length;
-    const denominator = serviced.filter(a => !a.isReservice).length;
-    const reservicePct = denominator > 0 ? (reserviceCount / denominator) * 100 : null;
+    const { pct: reservicePct, count: reserviceCount, scheduled } = reservicePctFor(reservices, frId);
 
     const att = attendanceRows.find(a => a.techId === tech.id);
     const attendancePct = att && att.workingDays > 0
@@ -162,7 +111,7 @@ async function getLeaderboard(year: number, mon: number, goals: typeof GOALS) {
     const kpis = toFpKpis(kpiResults, undefined, {
       reservice: {
         detail: reservicePct !== null
-          ? `${reserviceCount} reservice${reserviceCount !== 1 ? "s" : ""} charged to you on ${denominator} completed services.`
+          ? `${reserviceCount} reservice${reserviceCount !== 1 ? "s" : ""} charged to you on ${scheduled} scheduled appointments.`
           : undefined,
       },
     });

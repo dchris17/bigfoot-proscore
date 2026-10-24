@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { computeProScore, GOALS, type KpiInput, denseRank } from "@/lib/scoring/engine";
 import { getGoals } from "@/lib/goals";
 import { computeDrivingScore } from "@/lib/bouncie/client";
+import { computeReservices, reservicePctFor } from "@/lib/scoring/reservice";
 import {
   FootprintShell,
   TechCard,
@@ -48,20 +49,20 @@ async function getTechData(techId: string, year: number, mon: number, goals: typ
   });
   if (!tech || !tech.included || !tech.active) return null;
 
-  const allTechs: { id: string; fieldroutesEmployeeId: number }[] = await db.tech.findMany({
+  const allTechs: { id: string; name: string; fieldroutesEmployeeId: number }[] = await db.tech.findMany({
     where: { included: true, active: true },
-    select: { id: true, fieldroutesEmployeeId: true },
+    select: { id: true, name: true, fieldroutesEmployeeId: true },
   });
 
-  const [appts, attendanceRow, techTrips, historyRows, starsRows] = await Promise.all([
+  const [appts, reservices, attendanceRow, techTrips, historyRows, starsRows] = await Promise.all([
     prisma.appointment.findMany({
       where: { date: { gte: monthStart, lt: monthEnd }, status: 1 },
       select: {
         assignedEmployeeId: true, servicedByEmployeeId: true,
-        productionValue: true, checkIn: true, checkOut: true, rawJson: true,
-        date: true, isReservice: true, customerId: true,
+        productionValue: true, checkIn: true, checkOut: true,
       },
     }),
+    computeReservices(monthStart, monthEnd),
     db.attendance.findFirst({
       where: { techId, year, month: mon },
       select: { callouts: true, workingDays: true },
@@ -94,9 +95,7 @@ async function getTechData(techId: string, year: number, mon: number, goals: typ
       }
     }
     const prodHr = totalHrs > 0 ? totalProd / totalHrs : null;
-    const reserviceCount = serviced.filter(a => a.isReservice).length;
-    const denominator = serviced.filter(a => !a.isReservice).length;
-    const reservicePct = denominator > 0 ? (reserviceCount / denominator) * 100 : null;
+    const reservicePct = reservicePctFor(reservices, frId).pct;
     const { proscoreRaw, proscore } = computeProScore([
       { key: "driving",    actual: null,         goal: goals.driving },
       { key: "reservice",  actual: reservicePct, goal: goals.reservice, curve: "goal_over_actual" },
@@ -126,9 +125,8 @@ async function getTechData(techId: string, year: number, mon: number, goals: typ
   }
   const prodHr = totalHrs > 0 ? totalProd / totalHrs : null;
 
-  const reserviceAppts = serviced.filter(a => a.isReservice);
-  const regularAppts = serviced.filter(a => !a.isReservice);
-  const reservicePct = regularAppts.length > 0 ? (reserviceAppts.length / regularAppts.length) * 100 : null;
+  const { pct: reservicePct, count: reserviceCount, scheduled } = reservicePctFor(reservices, frId);
+  const charged = reservices?.charges.get(frId) ?? [];
 
   const att = attendanceRow;
   const attendancePct = att && att.workingDays > 0
@@ -154,25 +152,23 @@ async function getTechData(techId: string, year: number, mon: number, goals: typ
 
   const { proscore, kpiResults } = computeProScore(inputs);
 
-  // Reservice drill table: list each reservice appointment
-  const reserviceDrillRows = reserviceAppts.map(a => {
-    const raw = a.rawJson as Record<string, unknown>;
-    const acctNo = raw.customerID ? String(raw.customerID) : "—";
-    const dateStr = a.date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-    const origId = raw.originalAppointmentID ? String(raw.originalAppointmentID) : "—";
-    return [dateStr, acctNo, origId];
-  });
+  // Reservice drill table: each reservice charged to this tech, newest first
+  const shortDate = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+  const techName = (id: number) => id === frId ? "You" : allTechs.find(t => t.fieldroutesEmployeeId === id)?.name ?? "Other tech";
+  const reserviceDrillRows = [...charged]
+    .sort((a, b) => b.reserviceDate.getTime() - a.reserviceDate.getTime())
+    .map(c => [shortDate(c.reserviceDate), String(c.customerId), shortDate(c.originalDate), c.category, techName(c.reservicedById)]);
 
   const kpis = toFpKpis(kpiResults, undefined, {
     reservice: {
       detail: reservicePct !== null
-        ? `${reserviceAppts.length} reservice${reserviceAppts.length !== 1 ? "s" : ""} on ${regularAppts.length} completed services this month.`
+        ? `${reserviceCount} reservice${reserviceCount !== 1 ? "s" : ""} charged to you on ${scheduled} scheduled appointments this month.`
         : undefined,
-      drill: reserviceAppts.length > 0 ? {
-        title: `${reserviceAppts.length} reservice${reserviceAppts.length !== 1 ? "s" : ""} charged to you`,
-        columns: ["Date", "Account #", "Original Appt ID"],
+      drill: reserviceCount > 0 ? {
+        title: `${reserviceCount} reservice${reserviceCount !== 1 ? "s" : ""} charged to you`,
+        columns: ["Reservice", "Account #", "Your service", "Category", "Reserviced by"],
         rows: reserviceDrillRows,
-        note: "Attributed using Driven methodology: the tech who ran the most recent general service for this customer.",
+        note: "Each reservice is charged to the tech who did the customer's last service in the same category. The rate divides by every appointment scheduled for you this month.",
       } : undefined,
     },
     prod_hr: {
