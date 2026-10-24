@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { ticketProduction } from "@/lib/scoring/prodHr";
 
 const BASE_URL = `https://${process.env.FIELDROUTES_SUBDOMAIN ?? "aversepest"}.pestroutes.com/api`;
 
@@ -173,11 +174,11 @@ export async function syncFieldRoutesAppointments(
 
         const appts = Object.values(apptMap as Record<string, unknown>) as FRAppointment[];
 
-        // Fetch ticket data for completed appointments to get actual serviceCharge
+        // Fetch ticket data for completed appointments to get their production value
         const ticketIds = appts
           .filter(a => a.status === "1" && a.ticketID && a.ticketID !== "0")
           .map(a => a.ticketID as string);
-        const ticketChargeMap = new Map<string, number>();
+        const ticketProductionMap = new Map<string, number>();
         if (ticketIds.length > 0) {
           for (const tBatch of chunks(ticketIds, 100)) {
             const tRes = await frGet("ticket", "get", { ticketIDs: tBatch.join(",") }) as {
@@ -189,11 +190,11 @@ export async function syncFieldRoutesAppointments(
               errors.push(`${label} tickets: get failed — ${String(tRes.errorMessage ?? "unknown")}`);
             } else {
               const tProp = tRes.propertyName ?? "tickets";
-              const ticketArr = tRes[tProp] as Array<{ ticketID: string; serviceCharge: string }> | undefined;
+              const ticketArr = tRes[tProp] as Array<{ ticketID: string; productionValue: string; subTotal: string }> | undefined;
               if (ticketArr) {
                 for (const t of ticketArr) {
-                  const charge = parseFloat(t.serviceCharge);
-                  if (charge >= 0) ticketChargeMap.set(t.ticketID, charge);
+                  const production = ticketProduction(t);
+                  if (production !== null) ticketProductionMap.set(t.ticketID, production);
                 }
               }
             }
@@ -207,9 +208,8 @@ export async function syncFieldRoutesAppointments(
         for (const a of appts) {
           try {
             const apptDate = new Date(a.date);
-            // Use ticket serviceCharge as production value; FR's own productionValue is always -1.00
-            const ticketCharge = a.ticketID ? ticketChargeMap.get(a.ticketID as string) : undefined;
-            const production = ticketCharge !== undefined ? ticketCharge : null;
+            // Production comes from the ticket (Driven's rule, see ticketProduction); the appointment's own productionValue is always -1.00
+            const production = (a.ticketID ? ticketProductionMap.get(a.ticketID as string) : undefined) ?? null;
 
             const parseTs = (s: string | null) =>
               s && !s.startsWith("0000") ? new Date(s.replace(" ", "T") + "-06:00") : null;

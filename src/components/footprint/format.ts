@@ -42,7 +42,8 @@ interface KpiMeta {
 export const KPI_META: Record<string, KpiMeta> = {
   driving: { label: "Driving Score", short: "Driving", abbr: "Drive", source: "Bouncie", format: (v) => `${Math.round(v)}`, goal: (g) => `${g}` },
   reservice: { label: "Reservice Rate", short: "Reservice", abbr: "Resv", source: "FieldRoutes", format: (v) => `${v.toFixed(1)}%`, goal: (g) => `≤ ${g.toFixed(1)}%` },
-  prod_hr: { label: "Production / Hour", short: "Prod/Hr", abbr: "$/Hr", source: "FieldRoutes", format: (v) => `$${Math.round(v)}`, goal: (g) => `$${g}` },
+  // Floored, like Driven's leaderboard ($150.59 shows as $150)
+  prod_hr: { label: "Production / Hour", short: "Prod/Hr", abbr: "$/Hr", source: "FieldRoutes", format: (v) => `$${Math.floor(v)}`, goal: (g) => `$${g}` },
   completion: { label: "Completion", short: "Complete", abbr: "Done", source: "FieldRoutes", format: (v) => `${Math.round(v)}%`, goal: (g) => `${g}%` },
   attendance: { label: "Attendance", short: "Attend", abbr: "Attend", source: "Attendance log", format: (v) => `${Math.round(v)}%`, goal: (g) => `${g}%` },
   stars: { label: "5-Star Reviews", short: "Stars", abbr: "Stars", source: "Reviews", format: (v) => `${Math.round(v)}`, goal: (g) => `${g}/mo` },

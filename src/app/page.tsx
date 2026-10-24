@@ -5,6 +5,7 @@ import { computeProScore, GOALS, type KpiInput, denseRank } from "@/lib/scoring/
 import { getGoals } from "@/lib/goals";
 import { computeDrivingScore } from "@/lib/bouncie/client";
 import { computeReservices, reservicePctFor } from "@/lib/scoring/reservice";
+import { computeProdHr, prodHrFor, PROD_HR_SELECT } from "@/lib/scoring/prodHr";
 import {
   FootprintShell,
   Leaderboard,
@@ -35,10 +36,7 @@ async function getLeaderboard(year: number, mon: number, goals: typeof GOALS) {
   const [monthAppts, reservices, attendanceRows, techs, monthTrips, fiveStarReviews] = await Promise.all([
     prisma.appointment.findMany({
       where: { date: { gte: monthStart, lt: monthEnd }, status: 1 },
-      select: {
-        assignedEmployeeId: true, servicedByEmployeeId: true,
-        productionValue: true, checkIn: true, checkOut: true,
-      },
+      select: PROD_HR_SELECT,
     }),
     computeReservices(monthStart, monthEnd),
     db.attendance.findMany({
@@ -61,25 +59,13 @@ async function getLeaderboard(year: number, mon: number, goals: typeof GOALS) {
     ).catch(() => []) as Promise<{ attributedTechId: string; count: number }[]>,
   ]);
 
+  const prodHrs = computeProdHr(monthAppts);
+
   const BRANCH_ABBR: Record<string, string> = { Boise: "BOI", "Bigfoot Pest Control": "BOI", Portland: "PDX" };
 
   const rows = techs.map((tech: { id: string; name: string; firstName: string; fieldroutesEmployeeId: number; photoUrl: string | null; branch: { name: string } }) => {
     const frId = tech.fieldroutesEmployeeId;
-    const serviced = monthAppts.filter(
-      (a) => (a.servicedByEmployeeId ?? a.assignedEmployeeId) === frId
-    );
-
-    let totalProd = 0, totalHrs = 0;
-    for (const a of serviced) {
-      if (a.checkIn && a.checkOut) {
-        const hrs = (a.checkOut.getTime() - a.checkIn.getTime()) / 3600000;
-        if (hrs > 0 && hrs < 24) {
-          totalHrs += hrs;
-          totalProd += a.productionValue ? parseFloat(a.productionValue.toString()) : 0;
-        }
-      }
-    }
-    const prodHr = totalHrs > 0 ? totalProd / totalHrs : null;
+    const { prodHr } = prodHrFor(prodHrs, frId);
 
     const { pct: reservicePct, count: reserviceCount, scheduled } = reservicePctFor(reservices, frId);
 

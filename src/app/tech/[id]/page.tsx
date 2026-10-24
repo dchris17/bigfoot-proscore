@@ -6,6 +6,7 @@ import { computeProScore, GOALS, type KpiInput, denseRank } from "@/lib/scoring/
 import { getGoals } from "@/lib/goals";
 import { computeDrivingScore } from "@/lib/bouncie/client";
 import { computeReservices, reservicePctFor } from "@/lib/scoring/reservice";
+import { computeProdHr, formatWorkTime, prodHrFor, PROD_HR_SELECT } from "@/lib/scoring/prodHr";
 import {
   FootprintShell,
   TechCard,
@@ -57,10 +58,7 @@ async function getTechData(techId: string, year: number, mon: number, goals: typ
   const [appts, reservices, attendanceRow, techTrips, historyRows, starsRows] = await Promise.all([
     prisma.appointment.findMany({
       where: { date: { gte: monthStart, lt: monthEnd }, status: 1 },
-      select: {
-        assignedEmployeeId: true, servicedByEmployeeId: true,
-        productionValue: true, checkIn: true, checkOut: true,
-      },
+      select: PROD_HR_SELECT,
     }),
     computeReservices(monthStart, monthEnd),
     db.attendance.findFirst({
@@ -84,17 +82,11 @@ async function getTechData(techId: string, year: number, mon: number, goals: typ
     ).catch(() => [{ count: 0 }]) as Promise<{ count: number }[]>,
   ]);
 
+  const prodHrs = computeProdHr(appts);
+
   // Rank: compute all techs this month
   function calcScore(frId: number) {
-    const serviced = appts.filter(a => (a.servicedByEmployeeId ?? a.assignedEmployeeId) === frId);
-    let totalProd = 0, totalHrs = 0;
-    for (const a of serviced) {
-      if (a.checkIn && a.checkOut) {
-        const hrs = (a.checkOut.getTime() - a.checkIn.getTime()) / 3600000;
-        if (hrs > 0 && hrs < 24) { totalHrs += hrs; totalProd += a.productionValue ? parseFloat(a.productionValue.toString()) : 0; }
-      }
-    }
-    const prodHr = totalHrs > 0 ? totalProd / totalHrs : null;
+    const { prodHr } = prodHrFor(prodHrs, frId);
     const reservicePct = reservicePctFor(reservices, frId).pct;
     const { proscoreRaw, proscore } = computeProScore([
       { key: "driving",    actual: null,         goal: goals.driving },
@@ -115,15 +107,7 @@ async function getTechData(techId: string, year: number, mon: number, goals: typ
 
   // This tech's full KPI data
   const frId = tech.fieldroutesEmployeeId;
-  const serviced = appts.filter(a => (a.servicedByEmployeeId ?? a.assignedEmployeeId) === frId);
-  let totalProd = 0, totalHrs = 0;
-  for (const a of serviced) {
-    if (a.checkIn && a.checkOut) {
-      const hrs = (a.checkOut.getTime() - a.checkIn.getTime()) / 3600000;
-      if (hrs > 0 && hrs < 24) { totalHrs += hrs; totalProd += a.productionValue ? parseFloat(a.productionValue.toString()) : 0; }
-    }
-  }
-  const prodHr = totalHrs > 0 ? totalProd / totalHrs : null;
+  const { prodHr, production: totalProd, workMinutes } = prodHrFor(prodHrs, frId);
 
   const { pct: reservicePct, count: reserviceCount, scheduled } = reservicePctFor(reservices, frId);
   const charged = reservices?.charges.get(frId) ?? [];
@@ -173,7 +157,7 @@ async function getTechData(techId: string, year: number, mon: number, goals: typ
     },
     prod_hr: {
       detail: prodHr !== null
-        ? `$${Math.round(totalProd).toLocaleString()} production across ${totalHrs.toFixed(1)} on-site hours.`
+        ? `$${totalProd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} production across ${formatWorkTime(workMinutes)} of work time.`
         : undefined,
     },
     attendance: {

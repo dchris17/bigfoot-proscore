@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { computeProScore, GOALS, KpiInput } from "@/lib/scoring/engine";
 import { computeReservices, reservicePctFor } from "@/lib/scoring/reservice";
+import { computeProdHr, prodHrFor } from "@/lib/scoring/prodHr";
 import { isAdmin } from "@/app/pin/actions";
 
 function daysInMonth(year: number, month: number) {
@@ -34,11 +35,11 @@ export async function POST(req: NextRequest) {
     },
     select: {
       id: true,
+      status: true,
+      date: true,
       assignedEmployeeId: true,
       servicedByEmployeeId: true,
       productionValue: true,
-      checkIn: true,
-      checkOut: true,
       rawJson: true,
     },
   });
@@ -52,6 +53,7 @@ export async function POST(req: NextRequest) {
   const dm = daysInMonth(year, mon);
   const de = daysElapsed(year, mon);
   const reservices = await computeReservices(monthStart, monthEnd);
+  const prodHrs = computeProdHr(appts);
 
   const techScores = techs.map((tech) => {
     const frId = tech.fieldroutesEmployeeId;
@@ -69,20 +71,8 @@ export async function POST(req: NextRequest) {
     // We'll compute this properly once we sync all statuses.
 
     // --- Production / hr ---
-    let totalProdValue = 0;
-    let totalHours = 0;
-    for (const a of serviced) {
-      if (a.checkIn && a.checkOut) {
-        const hrs = (a.checkOut.getTime() - a.checkIn.getTime()) / 3600000;
-        if (hrs > 0 && hrs < 24) {
-          totalHours += hrs;
-          // productionValue null means subscription default (-1 from FR)
-          // use 0 for now — Phase 3 will pull ticket values
-          totalProdValue += a.productionValue ? parseFloat(a.productionValue.toString()) : 0;
-        }
-      }
-    }
-    const prodHr = totalHours > 0 ? totalProdValue / totalHours : null;
+    const { prodHr, production: totalProdValue, workMinutes } = prodHrFor(prodHrs, frId);
+    const totalHours = workMinutes / 60;
 
     // --- Reservice % ---
     const { pct: reservicePct, count: reserviceCount } = reservicePctFor(reservices, frId);
