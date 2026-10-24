@@ -39,15 +39,14 @@ export function PinScreen({ onSubmit, length = 4, fontClassName = fpFontVars, th
   }, [onSubmit]);
 
   const press = useCallback((d: string) => {
-    if (busy) return;
+    if (busy || pin.length >= length) return;
     setError(null);
-    setPin((p) => {
-      if (p.length >= length) return p;
-      const next = p + d;
-      if (next.length === length) void submit(next);
-      return next;
-    });
-  }, [busy, length, submit]);
+    const next = pin + d;
+    setPin(next);
+    // Submit outside the state updater: React may run updaters twice, which
+    // would send the PIN twice and burn two of the three tries.
+    if (next.length === length) void submit(next);
+  }, [busy, pin, length, submit]);
 
   const back = useCallback(() => { if (!busy) setPin((p) => p.slice(0, -1)); }, [busy]);
 
